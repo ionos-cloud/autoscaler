@@ -26,14 +26,13 @@ type IECManagerImpl struct {
 }
 
 type clientConfObj struct {
-	confPath, defaultEndpoint, authURL, defaultToken string
-	insecure                                         bool
-	iecPollTimeout, iecPollInterval                  time.Duration
+	confPath, defaultEndpoint, defaultToken string
+	insecure                                bool
+	iecPollTimeout, iecPollInterval         time.Duration
 }
 
 const (
 	EnvIONOSSecretPath   = "IONOS_SECRET_PATH"
-	EnvIONOSAuthURL      = "IONOS_AUTH_URL"
 	EnvIONOSClusterID    = "IONOS_CLUSTER_ID"
 	EnvIONOSPollTimeout  = "IONOS_POLL_TIMEOUT"
 	EnvIONOSPollInterval = "IONOS_POLL_INTERVAL"
@@ -57,9 +56,6 @@ type IECManager interface {
 type Config struct {
 	// IonosDefaultEndpoint to override the default Ionos Endoint used by the IONOS Client in the Cluster Autoscaler
 	IONOSDefaultEndpoint string `yaml:"ionos_default_endpoint"`
-
-	// IONOSAuthURL is the auth url used by the the IONOS Client in the Cluster Autoscaler
-	IONOSAuthURL string `yaml:"ionos_auth_url"`
 
 	// ClusterID is the id associated with the cluster where Ionos Enterprise Cloud
 	// Cluster Autoscaler is running.
@@ -111,12 +107,6 @@ func (c *Config) valid() (err error) {
 			c.AutoscalerSecretPath = value
 		} else {
 			result = multierror.Append(result, errors.New("autoscaler secret path is not provided"))
-		}
-	}
-
-	if c.IONOSAuthURL == "" {
-		if value, ok := os.LookupEnv(EnvIONOSAuthURL); ok {
-			c.IONOSAuthURL = value
 		}
 	}
 
@@ -186,7 +176,6 @@ func CreateIECManager(configReader io.Reader) (IECManager, error) {
 		nodeGroups: make([]*NodeGroup, 0),
 		ionosConf: &clientConfObj{
 			confPath:        cfg.AutoscalerSecretPath,
-			authURL:         cfg.IONOSAuthURL,
 			defaultToken:    cfg.DefaultIONOSToken,
 			insecure:        cfg.DefaultIONOSConInsecure,
 			iecPollTimeout:  cfg.PollTimeout,
@@ -208,7 +197,7 @@ func processDC(dataCenterID, clusterID string, ionosConf *clientConfObj, iecConf
 	// For all tokens for datacenter
 	for _, t := range iecConfig.Tokens {
 		// Try to get a vaild token
-		client := iecClientGetter(t, iecConfig.Endpoint, ionosConf.authURL, iecConfig.Insecure)
+		client := iecClientGetter(t, iecConfig.Endpoint, iecConfig.Insecure)
 		nodePools, listError = client.ListKubernetesNodePools(clusterID)
 		if listError != nil {
 			// if unauthorized try next token

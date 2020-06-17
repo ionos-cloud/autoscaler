@@ -93,7 +93,6 @@ func TestNewManager(t *testing.T) {
 
 	t.Run("success, manager creation from env", func(t *testing.T) {
 		os.Setenv(EnvIONOSClusterID, "54321")
-		os.Setenv(EnvIONOSAuthURL, "https://auth.ionos.com")
 		os.Setenv(EnvIONOSSecretPath, "ionos-secret")
 		os.Setenv(EnvIONOSPollTimeout, "3m")
 		os.Setenv(EnvIONOSPollInterval, "30s")
@@ -104,7 +103,6 @@ func TestNewManager(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "54321", manager.GetClusterID(), "cluster ID does not match")
 		os.Unsetenv(EnvIONOSClusterID)
-		os.Unsetenv(EnvIONOSAuthURL)
 		os.Unsetenv(EnvIONOSSecretPath)
 		os.Unsetenv(EnvIONOSPollTimeout)
 		os.Unsetenv(EnvIONOSPollInterval)
@@ -168,7 +166,7 @@ func TestIECManager_Refresh(t *testing.T) {
 		ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
 			&profitbricks.KubernetesNodePools{Items: nodePools}, nil).Once()
 
-		iecClientGetter = func(token, endpoint, authURL string, insecure bool) *iecClient {
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{&ionosClient}
 		}
 
@@ -195,7 +193,7 @@ func TestIECManager_Refresh(t *testing.T) {
 			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
 				&profitbricks.KubernetesNodePools{Items: nodePools}, nil).Once()
 
-			iecClientGetter = func(token, endpoint, authURL string, insecure bool) *iecClient {
+			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 				return &iecClient{&ionosClient}
 			}
 
@@ -222,7 +220,7 @@ func TestIECManager_Refresh(t *testing.T) {
 			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
 				&profitbricks.KubernetesNodePools{
 					Items: nodePools[2:4]}, nil).Once()
-			iecClientGetter = func(token, endpoint, authURL string, insecure bool) *iecClient {
+			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 				return &iecClient{&ionosClient}
 			}
 
@@ -238,7 +236,7 @@ func TestIECManager_Refresh(t *testing.T) {
 			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
 				&profitbricks.KubernetesNodePools{
 					Items: []profitbricks.KubernetesNodePool{}}, nil).Once()
-			iecClientGetter = func(token, endpoint, authURL string, insecure bool) *iecClient {
+			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 				return &iecClient{&ionosClient}
 			}
 
@@ -254,7 +252,7 @@ func TestIECManager_Refresh(t *testing.T) {
 			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
 				nil, defaultError).Once()
 
-			iecClientGetter = func(token, endpoint, authURL string, insecure bool) *iecClient {
+			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 				return &iecClient{&ionosClient}
 			}
 			err := manager.Refresh()
@@ -285,7 +283,7 @@ func TestIECManager_Refresh(t *testing.T) {
 			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
 				&profitbricks.KubernetesNodePools{Items: nodePools}, nil).Once()
 
-			iecClientGetter = func(token, endpoint, authURL string, insecure bool) *iecClient {
+			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 				return &iecClient{&ionosClient}
 			}
 
@@ -310,7 +308,7 @@ func TestIECManager_Refresh(t *testing.T) {
 					HTTPStatus: http.StatusUnauthorized,
 				}).Once()
 
-			iecClientGetter = func(token, endpoint, authURL string, insecure bool) *iecClient {
+			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 				return &iecClient{&ionosClient}
 			}
 

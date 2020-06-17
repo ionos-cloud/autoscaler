@@ -66,7 +66,7 @@ func (n *NodeGroup) IncreaseSize(delta int) error {
 	var iecClient *iecClient
 	var allInvalid bool
 	for i, t := range iecConfig.Tokens {
-		iecClient = iecClientGetter(t, iecConfig.Endpoint, n.clientConf.authURL, iecConfig.Insecure)
+		iecClient = iecClientGetter(t, iecConfig.Endpoint, iecConfig.Insecure)
 		_, err = iecClient.UpdateKubernetesNodePool(n.clusterID, n.nodePool.ID, upgradeInput)
 		if err != nil {
 			if profitbricks.IsStatusUnauthorized(err) {
@@ -117,7 +117,7 @@ func (n *NodeGroup) DeleteNodes(kubernetesNodes []*apiv1.Node) error {
 		var iecClient *iecClient
 		var allInvalid bool
 		for i, t := range iecConfig.Tokens {
-			iecClient = iecClientGetter(t, iecConfig.Endpoint, n.clientConf.authURL, iecConfig.Insecure)
+			iecClient = iecClientGetter(t, iecConfig.Endpoint, iecConfig.Insecure)
 			_, err := iecClient.DeleteKubernetesNode(n.clusterID, n.id, nodeID)
 			if err != nil {
 				if profitbricks.IsStatusNotFound(err) {
@@ -202,7 +202,7 @@ func (n *NodeGroup) Nodes() ([]cloudprovider.Instance, error) {
 	var iecClient *iecClient
 	var allInvalid bool
 	for i, t := range iecConfig.Tokens {
-		iecClient = iecClientGetter(t, iecConfig.Endpoint, n.clientConf.authURL, iecConfig.Insecure)
+		iecClient = iecClientGetter(t, iecConfig.Endpoint, iecConfig.Insecure)
 		nodes, err = iecClient.ListKubernetesNodes(n.clusterID, n.nodePool.ID)
 		if err != nil {
 			if profitbricks.IsStatusUnauthorized(err) {
