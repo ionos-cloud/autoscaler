@@ -43,6 +43,8 @@ const (
 	MagnumProviderName = "magnum"
 	// KubemarkProviderName gets the provider name of kubemark
 	KubemarkProviderName = "kubemark"
+	// IECProviderName get the provider name of ionos enterprise cloud
+	IECProviderName = "iec"
 )
 
 // CloudProvider contains configuration info and functions for interacting with

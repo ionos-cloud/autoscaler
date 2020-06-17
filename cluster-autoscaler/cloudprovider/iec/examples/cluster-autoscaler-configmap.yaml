@@ -1,0 +1,11 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autoscaler-config
+  namespace: kube-system
+data:
+  config:
+    cluster_id: YOUR_CLUSTERS_ID
+    autoscaler_secret_name: NAME_OF_THE_AUTOSCALER_SECRET
+    namespace: NAMESPACE_AUTOSCALER_AND_SECRET_ARE_DEPLOYED_TO
