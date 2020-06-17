@@ -114,7 +114,7 @@ func TestIECCloudProvider_NodeGroupForNode(t *testing.T) {
 			&profitbricks.KubernetesNodes{Items: []profitbricks.KubernetesNode{
 				defaultNode,
 			}}, nil)
-		iecClientGetter = func(token, endpoint, authURL string, insecure bool) *iecClient {
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
 		}
 
@@ -137,7 +137,7 @@ func TestIECCloudProvider_NodeGroupForNode(t *testing.T) {
 			&profitbricks.KubernetesNodes{Items: []profitbricks.KubernetesNode{
 				defaultNode,
 			}}, nil)
-		iecClientGetter = func(token, endpoint, authURL string, insecure bool) *iecClient {
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
 		}
 
@@ -161,7 +161,7 @@ func TestIECCloudProvider_NodeGroupForNode(t *testing.T) {
 			&profitbricks.KubernetesNodes{Items: []profitbricks.KubernetesNode{
 				defaultNode,
 			}}, nil)
-		iecClientGetter = func(token, endpoint, authURL string, insecure bool) *iecClient {
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
 		}
 
@@ -184,7 +184,7 @@ func TestIECCloudProvider_NodeGroupForNode(t *testing.T) {
 		ionosClient := &mocks.Client{}
 		ionosClient.On("ListKubernetesNodes", mock.Anything, mock.Anything).Return(
 			nil, fmt.Errorf("oops something went wrong"))
-		iecClientGetter = func(token, endpoint, authURL string, insecure bool) *iecClient {
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
 		}
 

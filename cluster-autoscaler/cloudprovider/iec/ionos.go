@@ -16,14 +16,11 @@ var _ Client = &profitbricks.Client{}
 
 var iecClientGetter = newIECClient
 
-func newIECClient(token, endpoint, authURL string, insecure bool) *iecClient {
-	klog.V(4).Infof("Setting up IEC iecClient, url: %s, auth_url: %s", endpoint, authURL)
+func newIECClient(token, endpoint string, insecure bool) *iecClient {
+	klog.V(4).Infof("Setting up IEC iecClient, url: %s", endpoint)
 	ionosClient := profitbricks.NewClientbyToken(token)
 	if endpoint != "" {
 		ionosClient.SetCloudApiURL(endpoint)
-	}
-	if authURL != "" {
-		ionosClient.SetAuthApiUrl(authURL)
 	}
 	if insecure {
 		ionosClient.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: insecure})
