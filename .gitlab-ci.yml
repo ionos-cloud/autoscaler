@@ -36,9 +36,6 @@ image_push_other:
     - tags
     - /^release-.*/
   before_script:
-    - apk add git
-    - git fetch origin
-    - git describe --always --tags --exclude='chart/*' --match='cluster-autoscaler-*'
     - export VERSION="${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}"
 
 image_push_master:
@@ -47,10 +44,7 @@ image_push_master:
     - master
     - /^release-.*/
   before_script:
-    - apk add git
-    - apk add git
-    - git fetch origin
-    - export VERSION="$(git describe --always --tags --exclude='chart/*' --match='cluster-autoscaler-*')"
+    - export VERSION="${CI_COMMIT_SHA}"
 
 image_push_tag:
   extends: .image_push
