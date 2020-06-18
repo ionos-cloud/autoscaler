@@ -1,0 +1,74 @@
+---
+stages:
+  - build
+  - image
+
+build:
+  stage: build
+  image: registry.dev.k8s.uf0.de/schegi/autoscaling-builder:latest
+  artifacts:
+    expire_in: 2 hours
+    paths:
+      - autoscaler
+  script:
+    - mkdir -p /gopath/src/k8s.io/autoscaler
+    - mv cluster-autoscaler /gopath/src/k8s.io/autoscaler
+    - cd /gopath/src/k8s.io/autoscaler/cluster-autoscaler
+    - CGO_ENABLED=0 GO111MODULE=off GOOS=linux go build -o cluster-autoscaler --ldflags "-s" --tags iec
+    - mv cluster-autoscaler $CI_PROJECT_DIR/autoscaler
+
+.image_push:
+  stage: image
+  image: docker:stable
+  services:
+    - name: docker:stable-dind
+  script:
+    - cat $DOCKER_REGISTRY_PASS | docker login --username $DOCKER_REGISTRY_USER --password-stdin $DOCKER_REGISTRY
+    - mv autoscaler cluster-autoscaler/cluster-autoscaler
+    - cd cluster-autoscaler
+    - docker build -t ${DOCKER_REGISTRY}/kore/cluster-autoscaler-iec:${VERSION} .
+    - docker image push ${DOCKER_REGISTRY}/kore/cluster-autoscaler-iec:${VERSION}
+
+image_push_other:
+  extends: .image_push
+  except:
+    - master
+    - tags
+    - /^release-.*/
+  before_script:
+    - apk add git
+    - git fetch origin
+    - git describe --always --tags --exclude='chart/*' --match='cluster-autoscaler-*'
+    - export VERSION="${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}"
+
+image_push_master:
+  extends: .image_push
+  only:
+    - master
+    - /^release-.*/
+  before_script:
+    - apk add git
+    - apk add git
+    - git fetch origin
+    - export VERSION="$(git describe --always --tags --exclude='chart/*' --match='cluster-autoscaler-*')"
+
+image_push_tag:
+  extends: .image_push
+  only:
+    - tags
+  except:
+    variables:
+      - $CI_COMMIT_TAG =~ /^chart\/.*/
+  before_script:
+    - apk add make
+    - export VERSION=${CI_COMMIT_TAG}
+  script:
+    - cat $DOCKER_REGISTRY_PASS | docker login --username $DOCKER_REGISTRY_USER --password-stdin $DOCKER_REGISTRY
+    - mv autoscaler cluster-autoscaler/cluster-autoscaler
+    - cd cluster-autoscaler
+    - docker build -t ${DOCKER_REGISTRY}/kore/cluster-autoscaler-iec:${VERSION} .
+    - docker image push ${DOCKER_REGISTRY}/kore/cluster-autoscaler-iec:${VERSION}
+    - docker image tag ${DOCKER_REGISTRY}/kore/cluster-autoscaler-iec:${VERSION} ${DOCKER_REGISTRY_PROD}/kore/cluster-autoscaler-iec:${VERSION}
+    - export DOCKER_REGISTRY=${DOCKER_REGISTRY_PROD}
+    - cat $DOCKER_REGISTRY_PASS | docker login --username $DOCKER_REGISTRY_USER --password-stdin $DOCKER_REGISTRY
+    - docker image push ${DOCKER_REGISTRY}/kore/cluster-autoscaler-iec:${VERSION}
