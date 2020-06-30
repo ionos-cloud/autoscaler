@@ -13,6 +13,10 @@ import (
 )
 
 var (
+	zero      = uint32(0)
+	one       = uint32(1)
+	two       = uint32(2)
+	three     = uint32(3)
 	nodePools = []profitbricks.KubernetesNodePool{
 		{
 			ID: "1",
@@ -20,9 +24,9 @@ var (
 				Name:         "nodepool-1",
 				NodeCount:    2,
 				DatacenterID: "12345",
-				Autoscaling: &profitbricks.Autoscaling{
-					MinNodeCount: 1,
-					MaxNodeCount: 3,
+				AutoScaling: &profitbricks.AutoScaling{
+					MinNodeCount: &one,
+					MaxNodeCount: &three,
 				},
 			},
 		}, {
@@ -31,9 +35,9 @@ var (
 				Name:         "nodepool-2",
 				NodeCount:    2,
 				DatacenterID: "12345",
-				Autoscaling: &profitbricks.Autoscaling{
-					MinNodeCount: 1,
-					MaxNodeCount: 2,
+				AutoScaling: &profitbricks.AutoScaling{
+					MinNodeCount: &one,
+					MaxNodeCount: &two,
 				},
 			},
 		}, {
@@ -42,9 +46,9 @@ var (
 				Name:         "nodepool-3",
 				NodeCount:    2,
 				DatacenterID: "12345",
-				Autoscaling: &profitbricks.Autoscaling{
-					MinNodeCount: 0,
-					MaxNodeCount: 0,
+				AutoScaling: &profitbricks.AutoScaling{
+					MinNodeCount: &zero,
+					MaxNodeCount: &zero,
 				},
 			},
 		}, {
@@ -56,12 +60,22 @@ var (
 		}, {
 			ID: "5",
 			Properties: &profitbricks.KubernetesNodePoolProperties{
-				Name:         "nodepool-1",
+				Name:         "nodepool-5",
 				NodeCount:    2,
 				DatacenterID: "54321",
-				Autoscaling: &profitbricks.Autoscaling{
-					MinNodeCount: 1,
-					MaxNodeCount: 3,
+				AutoScaling: &profitbricks.AutoScaling{
+					MinNodeCount: &one,
+					MaxNodeCount: &three,
+				},
+			},
+		}, {
+			ID: "6",
+			Properties: &profitbricks.KubernetesNodePoolProperties{
+				Name:      "nodepool-6",
+				NodeCount: 2,
+				AutoScaling: &profitbricks.AutoScaling{
+					MinNodeCount: nil,
+					MaxNodeCount: nil,
 				},
 			},
 		},

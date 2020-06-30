@@ -222,7 +222,7 @@ func processDC(dataCenterID, clusterID string, ionosConf *clientConfObj, iecConf
 	if nodePools != nil {
 		for _, nodePool := range nodePools.Items {
 			klog.V(4).Infof("Processing nodepool: %s", nodePool.ID)
-			if !nodePool.Properties.Autoscaling.Enabled() {
+			if nodePool.Properties.AutoScaling == nil || !nodePool.Properties.AutoScaling.Enabled() {
 				klog.V(4).Infof("Autoscaling for nodepool %s is disabled, skipping", nodePool.ID)
 				continue
 			}
@@ -237,8 +237,8 @@ func processDC(dataCenterID, clusterID string, ionosConf *clientConfObj, iecConf
 				clusterID:  clusterID,
 				clientConf: ionosConf,
 				nodePool:   &np,
-				minSize:    int(nodePool.Properties.Autoscaling.MinNodeCount),
-				maxSize:    int(nodePool.Properties.Autoscaling.MaxNodeCount),
+				minSize:    int(*nodePool.Properties.AutoScaling.MinNodeCount),
+				maxSize:    int(*nodePool.Properties.AutoScaling.MaxNodeCount),
 			})
 			klog.V(4).Infof("Added group for node pool %q name: %s", nodePool.ID, nodePool.Properties.Name)
 		}
