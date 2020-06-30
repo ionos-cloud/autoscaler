@@ -9,13 +9,9 @@ const (
 	// Kubernetes cluster/nodepool resource state is deploying
 	K8sStateDeploying = "DEPLOYING"
 	// Kubernetes cluster/nodepool resource state is active
-	K8sStateAcvtive = "ACTIVE"
+	K8sStateActive = "ACTIVE"
 	// Kubernetes cluster/nodepool resource state is failed
 	K8sStateFailed = "FAILED"
-	// Kubernetes cluster/nodepool resource state is suspended
-	K8sStateSuspended = "SUSPENDED"
-	// Kubernetes cluster/nodepool resource state is failed_suspended
-	K8sStateFailedSuspended = "FAILED_SUSPENDED"
 	// Kubernetes cluster/nodepool resource state is updating
 	K8sStateUpdating = "UPDATING"
 	// Kubernetes cluster/nodepool resource state is failed_updating
@@ -32,9 +28,9 @@ const (
 	K8sNodeStateProvisioning = "PROVISIONING"
 	// Kubernetes Node resource state is provisioned
 	K8sNodeStateProvisioned = "PROVISIONED"
-	// Kubernetes Node resource state is terminating,
+	// Kubernetes Node resource state is terminating
 	K8sNodeStateTerminating = "TERMINATING"
-	// Kubernetes Node resource state is rebuilding,
+	// Kubernetes Node resource state is rebuilding
 	K8sNodeStateRebuilding = "REBUILDING"
 )
 
@@ -115,6 +111,15 @@ type KubernetesClusterEntities struct {
 	NodePools *KubernetesNodePools `json:"nodepools,omitempty"`
 }
 
+type AutoScaling struct {
+	// The minimum number of nodes this node pool can be scaled down to
+	// Required: false
+	MinNodeCount *uint32 `json:"minNodeCount,omitempty"`
+	// The maximum number of nodes this node pool can be scaled up to
+	// Required: false
+	MaxNodeCount *uint32 `json:"maxNodeCount,omitempty"`
+}
+
 type MaintenanceWindow struct {
 	// The english name of the day of the week
 	// Required: false
@@ -122,15 +127,6 @@ type MaintenanceWindow struct {
 	// A string of the following format: 08:00:00
 	// Required: false
 	Time string `json:"time,omitempty"`
-}
-
-type Autoscaling struct {
-	// The minimum number of worker nodes that the
-	// managed node group can scale in.
-	MinNodeCount uint32 `json:"minNodeCount,omitempty"`
-	// The maximum number of worker nodes that the
-	// managed node pool can scale-out.
-	MaxNodeCount uint32 `json:"maxNodeCount,omitempty"`
 }
 
 type KubernetesClusterProperties struct {
@@ -241,13 +237,13 @@ type KubernetesNodePoolProperties struct {
 	// Required: true
 	K8sVersion string `json:"k8sVersion,omitempty"`
 
+	// Whether this cluster should autoscale. This is comprised of a minimum and maximum number of nodes
+	// Required: false
+	AutoScaling *AutoScaling `json:"autoScaling,omitempty"`
+
 	// The desired Maintanance Window
 	// Required: false
 	MaintenanceWindow *MaintenanceWindow `json:"maintenanceWindow,omitempty"`
-
-	// The desired Autoscaling Limits
-	// Required: false
-	Autoscaling *Autoscaling `json:"autoScaling,omitempty"`
 }
 
 type KubernetesNodePools struct {
@@ -322,7 +318,7 @@ type KubernetesNodeProperties struct {
 	PublicIP string `json:"publicIP,omitempty"`
 
 	// The k8s version that the node has.
-	// Read Only: true
+	// Read Only: false
 	K8sVersion string `json:"k8sVersion,omitempty"`
 }
 
@@ -422,9 +418,6 @@ func (c *Client) ReplaceKubernetesNode(clusterID, nodePoolID, nodeID string) (*h
 	return &h, validateResponse(rsp, http.StatusAccepted)
 }
 
-func (n *Autoscaling) Enabled() bool {
-	if n == nil || (n.MinNodeCount == 0 && n.MaxNodeCount == 0) {
-		return false
-	}
-	return true
+func (a AutoScaling) Enabled() bool {
+	return !(a.MinNodeCount == nil || a.MaxNodeCount == nil || *a.MinNodeCount == 0 && *a.MaxNodeCount == 0)
 }

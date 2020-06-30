@@ -47,8 +47,8 @@ func testNodeGroup(clientConf *clientConfObj, inp *profitbricks.KubernetesNodePo
 	var minNodes, maxNodes int
 	var id string
 	if inp != nil {
-		minNodes = int(inp.Properties.Autoscaling.MinNodeCount)
-		maxNodes = int(inp.Properties.Autoscaling.MaxNodeCount)
+		minNodes = int(*inp.Properties.AutoScaling.MinNodeCount)
+		maxNodes = int(*inp.Properties.AutoScaling.MaxNodeCount)
 	}
 	if inp != nil {
 		id = inp.ID
@@ -68,13 +68,13 @@ func initIONOSNodePool(nodecount, min, max uint32, id, state string) *profitbric
 	np := &profitbricks.KubernetesNodePool{
 		Properties: &profitbricks.KubernetesNodePoolProperties{
 			NodeCount: nodecount,
-			Autoscaling: &profitbricks.Autoscaling{
-				MinNodeCount: min,
-				MaxNodeCount: max,
+			AutoScaling: &profitbricks.AutoScaling{
+				MinNodeCount: &min,
+				MaxNodeCount: &max,
 			},
 		},
 		Metadata: &profitbricks.Metadata{
-			State: profitbricks.K8sStateAcvtive,
+			State: profitbricks.K8sStateActive,
 		},
 	}
 	if id != "" {
@@ -419,8 +419,8 @@ func TestNodeGroup_DeleteNodes(t *testing.T) {
 		ionosClient := &mocks.Client{}
 		ng := initNodeGroup(4, 1, 4, nil)
 		count := ng.nodePool.Properties.NodeCount
-		min := ng.nodePool.Properties.Autoscaling.MinNodeCount
-		max := ng.nodePool.Properties.Autoscaling.MaxNodeCount
+		min := *ng.nodePool.Properties.AutoScaling.MinNodeCount
+		max := *ng.nodePool.Properties.AutoScaling.MaxNodeCount
 		id := ng.nodePool.ID
 		state := ng.nodePool.Metadata.State
 		// Delete first node,
@@ -500,8 +500,8 @@ func TestNodeGroup_DeleteNodes(t *testing.T) {
 			ionosClient := &mocks.Client{}
 			ng := initNodeGroup(4, 1, 4, &clientConfObj{})
 			count := ng.nodePool.Properties.NodeCount
-			min := ng.nodePool.Properties.Autoscaling.MinNodeCount
-			max := ng.nodePool.Properties.Autoscaling.MaxNodeCount
+			min := *ng.nodePool.Properties.AutoScaling.MinNodeCount
+			max := *ng.nodePool.Properties.AutoScaling.MaxNodeCount
 			id := ng.nodePool.ID
 			state := ng.nodePool.Metadata.State
 			// Delete node,

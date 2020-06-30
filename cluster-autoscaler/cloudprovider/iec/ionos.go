@@ -37,7 +37,7 @@ func (i *iecClient) PollNodePoolNodeCount(clusterID, nodepoolID string, targetSi
 			return false, err
 		}
 		klog.V(5).Infof("State: %s, nodecount got: %d, want %d", np.Metadata.State, np.Properties.NodeCount, targetSize)
-		if np.Metadata.State == profitbricks.K8sStateAcvtive && np.Properties.NodeCount == targetSize {
+		if np.Metadata.State == profitbricks.K8sStateActive && np.Properties.NodeCount == targetSize {
 			return true, nil
 		}
 		return false, nil

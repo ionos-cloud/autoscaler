@@ -381,7 +381,7 @@ replace github.com/rancher/go-rancher => github.com/rancher/go-rancher v0.1.0
 
 replace github.com/vektra/mockery => github.com/vektra/mockery v0.0.0-20181123154057-e78b021dcbb5
 
-replace github.com/profitbricks/profitbricks-sdk-go/v5 => github.com/stratoag/profitbricks-sdk-go/v5 v5.0.2-0.20200615114127-c65bf3884051
+replace github.com/profitbricks/profitbricks-sdk-go/v5 => github.com/stratoag/profitbricks-sdk-go/v5 v5.0.2-0.20200630130641-e63df17f8eb7
 
 replace github.com/hashicorp/go-multierror => github.com/hashicorp/go-multierror v1.1.0
 
