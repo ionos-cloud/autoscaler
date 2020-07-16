@@ -15,11 +15,17 @@ var (
 			Metadata: &profitbricks.Metadata{
 				State: profitbricks.K8sNodeStateProvisioning,
 			},
+			Properties: &profitbricks.KubernetesNodeProperties{
+				Name: "node1",
+			},
 		},
 		{
 			ID: "2",
 			Metadata: &profitbricks.Metadata{
 				State: profitbricks.K8sNodeStateProvisioned,
+			},
+			Properties: &profitbricks.KubernetesNodeProperties{
+				Name: "node2",
 			},
 		},
 		{
@@ -27,17 +33,26 @@ var (
 			Metadata: &profitbricks.Metadata{
 				State: profitbricks.K8sNodeStateRebuilding,
 			},
+			Properties: &profitbricks.KubernetesNodeProperties{
+				Name: "node3",
+			},
 		},
 		{
 			ID: "4",
 			Metadata: &profitbricks.Metadata{
 				State: profitbricks.K8sNodeStateTerminating,
 			},
+			Properties: &profitbricks.KubernetesNodeProperties{
+				Name: "node4",
+			},
 		},
 		{
 			ID: "5",
 			Metadata: &profitbricks.Metadata{
 				State: profitbricks.K8sNodeStateReady,
+			},
+			Properties: &profitbricks.KubernetesNodeProperties{
+				Name: "node5",
 			},
 		},
 	}
