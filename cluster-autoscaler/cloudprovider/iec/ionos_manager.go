@@ -1,17 +1,19 @@
 package iec
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"time"
 
-	"gopkg.in/yaml.v2"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/hashicorp/go-multierror"
+	"github.com/pkg/errors"
 	"github.com/profitbricks/profitbricks-sdk-go/v5"
+	"gopkg.in/yaml.v2"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/klog"
 )
 
@@ -23,6 +25,7 @@ type IECManagerImpl struct {
 	clusterID  string
 	ionosConf  *clientConfObj
 	nodeGroups []*NodeGroup
+	interrupt  chan struct{}
 }
 
 type clientConfObj struct {
@@ -47,6 +50,8 @@ const (
 type IECManager interface {
 	// Refresh triggers refresh of cached resources.
 	Refresh() error
+	// Cleanup cleans up open resources before the cloud provider is destroyed, i.e. go routines etc.
+	Cleanup()
 	// GetNodesGroups
 	GetNodeGroups() []*NodeGroup
 	// GetClusterID
@@ -83,7 +88,7 @@ type Config struct {
 }
 
 func (c *Config) valid() (err error) {
-	klog.V(4).Info("Processing config")
+	klog.V(debug).Info("Processing config")
 	var result *multierror.Error
 	if c.IONOSDefaultEndpoint == "" {
 		if value, ok := os.LookupEnv(EnvIONOSEndpoint); ok {
@@ -124,7 +129,7 @@ func (c *Config) valid() (err error) {
 		if value, ok := os.LookupEnv(EnvIONOSPollTimeout); ok {
 			t, err := time.ParseDuration(value)
 			if err != nil {
-				result = multierror.Append(fmt.Errorf("error parsing poll timeout %s: %v", value, err))
+				result = multierror.Append(errors.Wrapf(err, "error parsing poll timeout %s", value))
 			} else {
 				c.PollTimeout = t
 			}
@@ -136,7 +141,7 @@ func (c *Config) valid() (err error) {
 		if value, ok := os.LookupEnv(EnvIONOSPollInterval); ok {
 			i, err := time.ParseDuration(value)
 			if err != nil {
-				result = multierror.Append(fmt.Errorf("error parsing poll interval %s: %v", value, err))
+				result = multierror.Append(errors.Wrapf(err, "error parsing poll interval %s", value))
 			} else {
 				c.PollInterval = i
 			}
@@ -154,10 +159,10 @@ var (
 )
 
 func CreateIECManager(configReader io.Reader) (IECManager, error) {
-	klog.V(4).Info("Creating IEC manager")
+	klog.V(debug).Info("Creating IEC manager")
 	cfg := &Config{}
 	if configReader != nil {
-		klog.V(5).Info("Decoding config yaml")
+		klog.V(trace).Info("Decoding config yaml")
 		err := yaml.NewDecoder(configReader).Decode(cfg)
 		if err != nil {
 			return nil, err
@@ -181,28 +186,42 @@ func CreateIECManager(configReader io.Reader) (IECManager, error) {
 			iecPollTimeout:  cfg.PollTimeout,
 			iecPollInterval: cfg.PollInterval,
 		},
+		interrupt: make(chan struct{}),
 	}
+
+	go wait.Until(func() {
+		for _, ng := range m.nodeGroups {
+			ng.cache.reset()
+		}
+	}, time.Hour, m.interrupt)
 
 	return m, nil
 }
 
-func processDC(dataCenterID, clusterID string, ionosConf *clientConfObj, iecConfig IECConfig) ([]*NodeGroup, error) {
+// Cleanup cleans up all resources before the cloud provider is removed
+func (m IECManagerImpl) Cleanup() {
+	close(m.interrupt)
+}
+
+func (m IECManagerImpl) processDC(dataCenterID string, iecConfig IECConfig) ([]*NodeGroup, error) {
 	var (
 		nodePools *profitbricks.KubernetesNodePools
 		listError error
 		groups    []*NodeGroup
 	)
-	klog.V(4).Infof("Working on datacenter %s.", dataCenterID)
+	if dataCenterID != "" {
+		klog.V(debug).Infof("Working on datacenter %s.", dataCenterID)
+	}
 	var invalid error
 	// For all tokens for datacenter
 	for _, t := range iecConfig.Tokens {
 		// Try to get a vaild token
 		client := iecClientGetter(t, iecConfig.Endpoint, iecConfig.Insecure)
-		nodePools, listError = client.ListKubernetesNodePools(clusterID)
+		nodePools, listError = client.ListKubernetesNodePools(m.clusterID)
 		if listError != nil {
 			// if unauthorized try next token
 			if profitbricks.IsStatusUnauthorized(listError) {
-				klog.V(5).Infof("Token invalid, trying next one")
+				klog.V(trace).Infof("Token invalid, trying next one")
 				invalid = listError
 				continue
 			}
@@ -217,33 +236,41 @@ func processDC(dataCenterID, clusterID string, ionosConf *clientConfObj, iecConf
 	}
 
 	if invalid != nil {
-		listError = fmt.Errorf("for all tokens for dc %s: %+v", dataCenterID, invalid)
+		listError = fmt.Errorf("errors for all tokens: %+v", invalid)
 	}
 	if nodePools != nil {
 		for _, nodePool := range nodePools.Items {
-			klog.V(4).Infof("Processing nodepool: %s", nodePool.ID)
+			klog.V(debug).Infof("Processing nodepool: %s", nodePool.ID)
 			if nodePool.Properties.AutoScaling == nil || !nodePool.Properties.AutoScaling.Enabled() {
-				klog.V(4).Infof("Autoscaling for nodepool %s is disabled, skipping", nodePool.ID)
+				klog.V(debug).Infof("Autoscaling for nodepool %s is disabled, skipping", nodePool.ID)
 				continue
 			}
 			if dataCenterID != "" && nodePool.Properties.DatacenterID != dataCenterID {
-				klog.V(4).Infof(
+				klog.V(debug).Infof(
 					"Found nodepool in DC %s different from tokens dc %s, skipping", nodePool.Properties.DatacenterID, dataCenterID)
 				continue
 			}
 			np := nodePool
+			instanceCache := instanceCache{data: make(map[string]cloudprovider.Instance)}
+			for _, ng := range m.nodeGroups {
+				if ng.id == nodePool.ID {
+					instanceCache.data = ng.cache.getData()
+					break
+				}
+			}
 			groups = append(groups, &NodeGroup{
 				id:         nodePool.ID,
-				clusterID:  clusterID,
-				clientConf: ionosConf,
+				clusterID:  m.clusterID,
+				clientConf: m.ionosConf,
 				nodePool:   &np,
 				minSize:    int(*nodePool.Properties.AutoScaling.MinNodeCount),
 				maxSize:    int(*nodePool.Properties.AutoScaling.MaxNodeCount),
+				cache:      instanceCache,
 			})
-			klog.V(4).Infof("Added group for node pool %q name: %s", nodePool.ID, nodePool.Properties.Name)
+			klog.V(debug).Infof("Added group for node pool %q name: %s", nodePool.ID, nodePool.Properties.Name)
 		}
-	} else {
-		klog.Errorf("Error getting any nodegroup for DC %s: %v", dataCenterID, listError.Error())
+	} else if listError != nil {
+		klog.Errorf("error getting any nodegroup: %v", listError.Error())
 	}
 	return groups, listError
 }
@@ -251,39 +278,64 @@ func processDC(dataCenterID, clusterID string, ionosConf *clientConfObj, iecConf
 // Refreshes the cache holding the nodegroups. This is called by the CA based
 // on the `--scan-interval`. By default it's 10 seconds.
 func (m *IECManagerImpl) Refresh() error {
-	klog.V(4).Info("Refreshing")
+	klog.V(debug).Info("Refreshing")
 	var res *multierror.Error
 	var groups []*NodeGroup
-	if m.ionosConf.defaultToken != "" {
-		// Default token set
-		iecConfig, err := m.ionosConf.getIECConfig("")
-		if err != nil {
-			return err
-		}
-		groups, err = processDC("", m.clusterID, m.ionosConf, *iecConfig)
-		res = multierror.Append(res, err)
-	} else {
+	var groupIDs []string
+
+	// Fixed behaviour, make only one request for all DCs and use the first working
+	// token out of the list of all tokens from all DCs.
+	iecConfig, err := m.ionosConf.getIECConfig("")
+	if err != nil {
+		return err
+	}
+	if m.ionosConf.defaultToken == "" {
+		tokens := []string{}
 		iecConfigs, err := configs(m.ionosConf.confPath)
 		if err != nil {
 			return err
 		}
-
-		// For all datacenters in config
-		var dcGroups []*NodeGroup
-		for dataCenterID, iecConfig := range iecConfigs {
-			dcGroups, err = processDC(dataCenterID, m.clusterID, m.ionosConf, iecConfig)
-			res = multierror.Append(res, err)
-			groups = append(groups, dcGroups...)
+		for _, conf := range iecConfigs {
+			tokens = append(tokens, conf.Tokens...)
 		}
+		iecConfig.Tokens = tokens
 	}
-	klog.V(4).Infof("groups: %+v", groups)
+	groups, err = m.processDC("", *iecConfig)
+	res = multierror.Append(res, err)
+
+	// Intended,  make one requests per DC and use DC's tokens for this request.
+	//	if m.ionosConf.defaultToken != "" {
+	//		// Default token set
+	//		iecConfig, err := m.ionosConf.getIECConfig("")
+	//		if err != nil {
+	//			return err
+	//		}
+	//		groups, err = processDC("", m.clusterID, m.ionosConf, *iecConfig)
+	//		res = multierror.Append(res, err)
+	//	} else {
+	//		iecConfigs, err := configs(m.ionosConf.confPath)
+	//		if err != nil {
+	//			return err
+	//		}
+	//
+	//		// For all datacenters in config
+	//		var dcGroups []*NodeGroup
+	//		for dataCenterID, iecConfig := range iecConfigs {
+	//			dcGroups, err = processDC(dataCenterID, m.clusterID, m.ionosConf, iecConfig)
+	//			res = multierror.Append(res, err)
+	//			groups = append(groups, dcGroups...)
+	//		}
+	//	}
 	if len(groups) == 0 {
-		klog.V(4).Info("cluster-autoscaler is disabled. no node pools configured")
+		klog.V(debug).Info("cluster-autoscaler is disabled. no node pools configured")
 	}
 
 	errOrNil := res.ErrorOrNil()
 	if errOrNil == nil {
-		klog.V(5).Infof("Setting manager groups to %+v", groups)
+		for _, g := range groups {
+			groupIDs = append(groupIDs, g.id)
+		}
+		klog.V(debug).Infof("Setting manager groups to %+v", groupIDs)
 		m.nodeGroups = groups
 	}
 	return errOrNil

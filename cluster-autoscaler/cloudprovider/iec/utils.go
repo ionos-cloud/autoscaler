@@ -7,15 +7,18 @@ import (
 	"path/filepath"
 	"strings"
 
-	"k8s.io/klog"
-
+	"github.com/pkg/errors"
 	"github.com/profitbricks/profitbricks-sdk-go/v5"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/klog"
 )
 
 const (
 	iecProviderIDPrefix = "ionos://"
 	iecErrorCode        = "no-code-iec"
+	info                = 3
+	debug               = 4
+	trace               = 5
 )
 
 // toProviderID converts plain node id to a node.spec.ProviderID
@@ -84,7 +87,7 @@ func listFiles(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	klog.V(4).Infof("Found %d cloud configs %v", len(confFiles), confFiles)
+	klog.V(trace).Infof("Found %d cloud configs %v", len(confFiles), confFiles)
 	return confFiles, nil
 }
 
@@ -94,21 +97,20 @@ func getIECConfigs(confPath string) (map[string]IECConfig, error) {
 	var confMap = map[string]IECConfig{}
 	cloudConfs, err := files(confPath)
 	if err != nil {
-		return nil, fmt.Errorf("error getting files from %s: %v", confPath, err)
+		return nil, errors.Wrapf(err, "error getting files from %s", confPath)
 	}
 	for _, f := range cloudConfs {
 		conf, err := read(f)
 		if err != nil {
-			return nil, fmt.Errorf("couldn't read ionos iecClient config file %s, %v", f, err)
+			return nil, errors.Wrapf(err, "couldn't read ionos iecClient config file %s", f)
 		}
 		var cloudConfig IECConfig
 		err = json.Unmarshal(conf, &cloudConfig)
 		dcName := filepath.Base(f)
-		klog.V(4).Infof("Cloud config found for DC: %s", dcName)
 		confMap[dcName] = cloudConfig
 
 		if err != nil {
-			return nil, fmt.Errorf("error unmarshaling cloud config %s, %v", f, err)
+			return nil, errors.Wrapf(err, "error unmarshaling cloud config %s", f)
 		}
 	}
 	return confMap, nil
@@ -135,7 +137,7 @@ func (o *clientConfObj) getIECConfig(datacenterID string) (*IECConfig, error) {
 			break
 		}
 	}
-	klog.V(4).Infof("Using datacenterID: %s", datacenterID)
+	klog.V(trace).Infof("Using datacenterID: %s", datacenterID)
 	if config, ok := confMap[datacenterID]; ok {
 		return &config, nil
 	} else {

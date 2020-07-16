@@ -68,8 +68,13 @@ func (d *IECCloudProvider) NodeGroups() []cloudprovider.NodeGroup {
 // occurred. Must be implemented.
 func (d *IECCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
 	providerID := node.Spec.ProviderID
-	klog.V(4).Infof("checking nodegroups for node ID: %q", providerID)
-
+	for _, group := range d.manager.GetNodeGroups() {
+		if _, ok := group.cache.getInstance(providerID); ok {
+			klog.V(debug).Infof("Node %s found in nodegroup cache: %s", providerID, group.Id())
+			return group, nil
+		}
+	}
+	klog.V(debug).Infof("Node %s not found in any cache, requesting nodes from ionos", providerID)
 	// NOTE(arslan): the number of node groups per cluster is usually very
 	// small. So even though this looks like quadratic runtime, it's OK to
 	// proceed with this.
@@ -84,8 +89,7 @@ func (d *IECCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.Nod
 			if n.Id != providerID {
 				continue
 			}
-			klog.V(4).Infof("Node %s found in group: %s", providerID, group.Id())
-
+			klog.V(4).Infof("Node %s found after refresh in group: %s", providerID, group.Id())
 			return group, nil
 		}
 	}
@@ -139,6 +143,7 @@ func (d *IECCloudProvider) GetAvailableGPUTypes() map[string]struct{} {
 // Cleanup cleans up read resources before the cloud provider is destroyed,
 // i.e. go routines etc.
 func (d *IECCloudProvider) Cleanup() error {
+	d.manager.Cleanup()
 	return nil
 }
 

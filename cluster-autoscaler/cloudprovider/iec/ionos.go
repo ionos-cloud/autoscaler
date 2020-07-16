@@ -25,6 +25,7 @@ func newIECClient(token, endpoint string, insecure bool) *iecClient {
 	if insecure {
 		ionosClient.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: insecure})
 	}
+	ionosClient.SetDepth(1)
 	return &iecClient{Client: ionosClient}
 }
 

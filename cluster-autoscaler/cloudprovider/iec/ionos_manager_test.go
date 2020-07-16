@@ -214,7 +214,7 @@ func TestIECManager_Refresh(t *testing.T) {
 			err := manager.Refresh()
 			assert.NoError(t, err)
 			// Expect only nodegroups from dc 12345 with autoscaling enabled
-			assert.Len(t, manager.nodeGroups, 2, "number of nodegroups do not match")
+			assert.Len(t, manager.nodeGroups, 3, "number of nodegroups do not match")
 			// First nodegroup
 			assert.Equalf(t, 1, manager.nodeGroups[0].minSize,
 				"minimum node size for nodegroup %s does not match", manager.nodeGroups[0].id)
@@ -329,7 +329,7 @@ func TestIECManager_Refresh(t *testing.T) {
 			err := manager.Refresh()
 			assert.Error(t, err)
 			assert.Nil(t, manager.nodeGroups, "nodegroups must be nil")
-			assert.Contains(t, err.Error(), "for all tokens for dc 12345")
+			assert.Contains(t, err.Error(), "errors for all tokens")
 			ionosClient.AssertExpectations(t)
 		})
 		configs = getIECConfigs

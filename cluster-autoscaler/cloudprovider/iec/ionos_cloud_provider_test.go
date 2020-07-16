@@ -17,11 +17,11 @@ limitations under the License.
 package iec
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"testing"
 
+	"github.com/pkg/errors"
 	"github.com/profitbricks/profitbricks-sdk-go/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -58,6 +58,7 @@ func initializedManager(clientConf *clientConfObj) *IECManagerImpl {
 				clientConf: clientConf,
 				minSize:    1,
 				maxSize:    3,
+				cache:      instanceCache{data: make(map[string]cloudprovider.Instance)},
 			},
 		},
 	}
@@ -155,6 +156,23 @@ func TestIECCloudProvider_NodeGroupForNode(t *testing.T) {
 		ionosClient.AssertExpectations(t)
 	})
 
+	t.Run("success, found in cache", func(t *testing.T) {
+		provider := testCloudProvider(nil, nil)
+		provider.manager.GetNodeGroups()[0].cache.data = map[string]cloudprovider.Instance{
+			toProviderID("1"): cloudprovider.Instance{},
+		}
+		// try to get the nodeGroup for the node with ID 1
+		node := &apiv1.Node{
+			Spec: apiv1.NodeSpec{
+				ProviderID: toProviderID("1"),
+			},
+		}
+
+		nodeGroup, err := provider.NodeGroupForNode(node)
+		assert.NoError(t, err)
+		assert.Equalf(t, "1", nodeGroup.Id(), "expected nodegroup id 1, got %s", nodeGroup.Id())
+	})
+
 	t.Run("success, single token", func(t *testing.T) {
 		ionosClient := &mocks.Client{}
 		ionosClient.On("ListKubernetesNodes", "12345", "1").Return(
@@ -183,7 +201,7 @@ func TestIECCloudProvider_NodeGroupForNode(t *testing.T) {
 		// replace method mock in provider
 		ionosClient := &mocks.Client{}
 		ionosClient.On("ListKubernetesNodes", mock.Anything, mock.Anything).Return(
-			nil, fmt.Errorf("oops something went wrong"))
+			nil, errors.New("oops something went wrong"))
 		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
 		}

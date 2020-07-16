@@ -61,6 +61,7 @@ func testNodeGroup(clientConf *clientConfObj, inp *profitbricks.KubernetesNodePo
 		nodePool:   inp,
 		minSize:    minNodes,
 		maxSize:    maxNodes,
+		cache:      instanceCache{data: make(map[string]cloudprovider.Instance)},
 	}
 }
 
@@ -418,6 +419,11 @@ func TestNodeGroup_DeleteNodes(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		ionosClient := &mocks.Client{}
 		ng := initNodeGroup(4, 1, 4, nil)
+		instances := []cloudprovider.Instance{}
+		for _, n := range nodes {
+			instances = append(instances, cloudprovider.Instance{Id: n.Spec.ProviderID})
+		}
+		ng.cache.addInstances(instances)
 		count := ng.nodePool.Properties.NodeCount
 		min := *ng.nodePool.Properties.AutoScaling.MinNodeCount
 		max := *ng.nodePool.Properties.AutoScaling.MaxNodeCount
@@ -441,6 +447,10 @@ func TestNodeGroup_DeleteNodes(t *testing.T) {
 			return &iecClient{ionosClient}
 		}
 		err := ng.DeleteNodes(nodes[0:2])
+		for _, n := range nodes[0:2] {
+			_, ok := ng.cache.getInstance(n.Spec.ProviderID)
+			assert.False(t, ok)
+		}
 		assert.NoError(t, err)
 		ionosClient.AssertExpectations(t)
 		iecClientGetter = newIECClient
@@ -556,6 +566,10 @@ func TestNodeGroup_Nodes(t *testing.T) {
 		nodes, err := ng.Nodes()
 		assert.NoError(t, err)
 		assert.Equal(t, cloudproviderInstances, nodes, "nodes do not match")
+		for _, i := range cloudproviderInstances {
+			_, ok := ng.cache.getInstance(i.Id)
+			assert.True(t, ok, "expected %s to be in cache", i.Id)
+		}
 		ionosClient.AssertExpectations(t)
 		iecClientGetter = newIECClient
 	})
