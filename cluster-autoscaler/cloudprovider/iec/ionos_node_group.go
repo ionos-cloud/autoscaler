@@ -51,16 +51,37 @@ func (c *instanceCache) reset() {
 	c.data = map[string]cloudprovider.Instance{}
 }
 
+type wipLock struct {
+	sync.Mutex
+	v bool
+}
+
+func (s *wipLock) TrySet() bool {
+	s.Lock()
+	defer s.Unlock()
+	if s.v {
+		return false
+	}
+	s.v = true
+	return true
+}
+
+func (s *wipLock) UnSet() {
+	s.Lock()
+	defer s.Unlock()
+	s.v = false
+}
+
 type NodeGroup struct {
 	id         string
 	clusterID  string
 	clientConf *clientConfObj
-	nodePool   *profitbricks.KubernetesNodePool
 
 	minSize int
 	maxSize int
 
-	cache instanceCache
+	cache              instanceCache
+	deletionInProgress wipLock
 }
 
 // Maximum size of the node group.
@@ -76,21 +97,56 @@ func (n *NodeGroup) MinSize() int {
 // Target size of the node group. Might be different to the actual size, but
 // should stabilize.
 func (n *NodeGroup) TargetSize() (int, error) {
-	return int(n.nodePool.Properties.NodeCount), nil
+	nodePool, _, err := n.getValidClientAndPool(n.clusterID, n.id, n.clientConf)
+	if err != nil {
+		return 0, err
+	}
+	return int(nodePool.Properties.NodeCount), nil
+}
+
+func (n *NodeGroup) getValidClientAndPool(clusterID, nodepoolID string, config *clientConfObj) (*profitbricks.KubernetesNodePool, *iecClient, error) {
+	iecConfig, err := config.getIECConfig("")
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "error getting IECClient config")
+	}
+	var iecClient *iecClient
+	var allInvalid bool
+	var nodePool *profitbricks.KubernetesNodePool
+	for i, t := range iecConfig.Tokens {
+		iecClient = iecClientGetter(t, iecConfig.Endpoint, iecConfig.Insecure)
+		nodePool, err = iecClient.GetKubernetesNodePool(n.clusterID, n.id)
+		if err != nil {
+			if profitbricks.IsStatusUnauthorized(err) {
+				klog.V(trace).Infof("Token %d invalid, trying next one", i)
+				allInvalid = true
+				continue
+			}
+			return nil, nil, errors.Wrap(err, "failed to get nodepool")
+		}
+		allInvalid = false
+		break
+	}
+	if allInvalid {
+		return nil, nil, errors.New("All tokens invalid")
+	}
+	return nodePool, iecClient, nil
 }
 
 // Increases node group size
 func (n *NodeGroup) IncreaseSize(delta int) error {
-	klog.V(debug).Infof("Increasing nodegroup %s size, current: %d, delta: %d", n.id, n.nodePool.Properties.NodeCount, delta)
+	klog.V(debug).Infof("Increasing nodegroup %s size, delta: %d", n.id, delta)
 	if delta <= 0 {
 		return fmt.Errorf("delta must be positive, have: %d", delta)
 	}
-
-	targetSize := n.nodePool.Properties.NodeCount + uint32(delta)
+	nodePool, iecClient, err := n.getValidClientAndPool(n.clusterID, n.id, n.clientConf)
+	if err != nil {
+		return err
+	}
+	targetSize := nodePool.Properties.NodeCount + uint32(delta)
 
 	if targetSize > uint32(n.MaxSize()) {
 		return fmt.Errorf("size increase is too large. current: %d, desired: %d, max: %d",
-			n.nodePool.Properties.NodeCount, targetSize, n.MaxSize())
+			nodePool.Properties.NodeCount, targetSize, n.MaxSize())
 	}
 
 	upgradeInput := profitbricks.KubernetesNodePool{
@@ -99,40 +155,21 @@ func (n *NodeGroup) IncreaseSize(delta int) error {
 		},
 	}
 
-	iecConfig, err := n.clientConf.getIECConfig(n.nodePool.Properties.DatacenterID)
+	_, err = iecClient.UpdateKubernetesNodePool(n.clusterID, n.id, upgradeInput)
 	if err != nil {
-		return errors.Wrap(err, "error getting IECClient config")
-	}
-	var iecClient *iecClient
-	var allInvalid bool
-	for i, t := range iecConfig.Tokens {
-		iecClient = iecClientGetter(t, iecConfig.Endpoint, iecConfig.Insecure)
-		_, err = iecClient.UpdateKubernetesNodePool(n.clusterID, n.nodePool.ID, upgradeInput)
-		if err != nil {
-			if profitbricks.IsStatusUnauthorized(err) {
-				klog.V(trace).Infof("Token %d invalid, trying next one", i)
-				allInvalid = true
-				continue
-			}
-			return errors.Wrap(err, "failed to update nodepool")
-		}
-		allInvalid = false
-		break
-	}
-	if allInvalid {
-		return errors.New("All tokens invalid")
+		return errors.Wrap(err, "failed to update nodepool")
 	}
 
 	klog.V(info).Infof("Waiting for %v nodepool to reach target size. Polling every %v.", n.clientConf.iecPollTimeout, n.clientConf.iecPollInterval)
 	err = wait.PollImmediate(
 		n.clientConf.iecPollInterval,
 		n.clientConf.iecPollTimeout,
-		iecClient.PollNodePoolNodeCount(n.clusterID, n.nodePool.ID, targetSize))
+		iecClient.PollNodePoolNodeCount(n.clusterID, n.id, targetSize))
 	if err != nil {
 		return errors.Wrap(err, "failed to wait for nodepool update")
 	}
 
-	n.nodePool, err = iecClient.GetKubernetesNodePool(n.clusterID, n.nodePool.ID)
+	nodePool, err = iecClient.GetKubernetesNodePool(n.clusterID, n.id)
 	if err != nil {
 		return errors.Wrap(err, "failed to get nodepool")
 	}
@@ -144,51 +181,42 @@ func (n *NodeGroup) IncreaseSize(delta int) error {
 // given node doesn't belong to this node group. This function should wait
 // until node group size is updated. Implementation required.
 func (n *NodeGroup) DeleteNodes(kubernetesNodes []*apiv1.Node) error {
+	// Workaround for KoreAPI bug, dealing with multiple node deletes, may be removed after the bug is fixed.
+	if ok := n.deletionInProgress.TrySet(); !ok {
+		return fmt.Errorf("error, cannot delete, deletion in progress")
+	}
+	defer n.deletionInProgress.UnSet()
 	klog.V(info).Infof("Deleting %d nodes", len(kubernetesNodes))
 	for _, node := range kubernetesNodes {
 		klog.V(debug).Infof("Deleting node %s with id %s", node.Name, node.Spec.ProviderID)
 		// Use node.Spec.ProviderID as to retrieve nodeID
 		nodeID := toNodeID(node.Spec.ProviderID)
-		datacenterID := n.nodePool.Properties.DatacenterID
-		iecConfig, err := n.clientConf.getIECConfig(datacenterID)
+		nodePool, iecClient, err := n.getValidClientAndPool(n.clusterID, n.id, n.clientConf)
 		if err != nil {
-			return errors.Wrap(err, "error getting IECClient config")
+			return err
 		}
-		var iecClient *iecClient
-		var allInvalid bool
-		for i, t := range iecConfig.Tokens {
-			iecClient = iecClientGetter(t, iecConfig.Endpoint, iecConfig.Insecure)
-			_, err := iecClient.DeleteKubernetesNode(n.clusterID, n.id, nodeID)
-			if err != nil {
-				if profitbricks.IsStatusNotFound(err) {
-					allInvalid = false
-					break
-				}
-				if profitbricks.IsStatusUnauthorized(err) {
-					klog.V(trace).Infof("Token %d invalid, trying next one", i)
-					allInvalid = true
-					continue
-				}
-				return errors.Wrapf(err, "failed to delete node %s from cluster %s", n.id, n.clusterID)
-			}
-			allInvalid = false
-			break
-		}
-		if allInvalid {
-			return errors.New("All tokens invalid")
+		if nodePool.Metadata.State != profitbricks.K8sStateActive {
+			return fmt.Errorf(
+				"failed to delete node %s, nodepool state is %s waiting for state to become ACTIVE again.",
+				nodeID, nodePool.Metadata.State)
 		}
 
-		targetSize := n.nodePool.Properties.NodeCount - 1
+		_, err = iecClient.DeleteKubernetesNode(n.clusterID, n.id, nodeID)
+		if err != nil && !profitbricks.IsStatusNotFound(err) {
+			return errors.Wrapf(err, "failed to delete node %s from nodepool %s in cluster %s", nodeID, n.id, n.clusterID)
+		}
+
+		targetSize := nodePool.Properties.NodeCount - 1
 		err = wait.PollImmediate(
 			n.clientConf.iecPollInterval,
 			n.clientConf.iecPollTimeout,
-			iecClient.PollNodePoolNodeCount(n.clusterID, n.nodePool.ID, targetSize))
+			iecClient.PollNodePoolNodeCount(n.clusterID, n.id, targetSize))
 		if err != nil {
 			return errors.Wrap(err, "failed to wait for nodepool update")
 		}
-		n.nodePool.Properties.NodeCount = targetSize
 		// Delete node from instance cache
 		n.cache.deleteInstance(node.Spec.ProviderID)
+		klog.V(info).Infof("Sucessfully deleted %s", node.Name)
 	}
 	return nil
 }
@@ -203,10 +231,14 @@ func (n *NodeGroup) DecreaseTargetSize(delta int) error {
 		return fmt.Errorf("delta must be negative, have: %d", delta)
 	}
 
-	targetSize := int(n.nodePool.Properties.NodeCount) + delta
+	nodePool, _, err := n.getValidClientAndPool(n.clusterID, n.id, n.clientConf)
+	if err != nil {
+		return err
+	}
+	targetSize := int(nodePool.Properties.NodeCount) + delta
 	if targetSize < 0 || targetSize < n.MinSize() {
 		return fmt.Errorf("size decrease is too small. current: %d, desired: %d, min: %d",
-			n.nodePool.Properties.NodeCount, targetSize, n.MinSize())
+			nodePool.Properties.NodeCount, targetSize, n.MinSize())
 	}
 
 	// Since Ionos CloudAPI does not support the requested behavior we just always return an error.
@@ -228,13 +260,8 @@ func (n *NodeGroup) Debug() string {
 // required that Instance objects returned by this method have Id field set.
 // Other fields are optional.
 func (n *NodeGroup) Nodes() ([]cloudprovider.Instance, error) {
-	if n.nodePool == nil {
-		klog.Errorf("No nodepool associated with nodegroup: %s", n.id)
-		return nil, errors.New("node pool instance is not created")
-	}
-	klog.V(info).Infof("Getting nodes for nodegroup: %s backed by %s", n.id, n.nodePool.ID)
-	datacenterID := n.nodePool.Properties.DatacenterID
-	iecConfig, err := n.clientConf.getIECConfig(datacenterID)
+	klog.V(info).Infof("Getting nodes for nodegroup: %s in cluster %s", n.id, n.clusterID)
+	iecConfig, err := n.clientConf.getIECConfig("")
 	if err != nil {
 		return nil, errors.Wrap(err, "error getting IECClient config")
 	}
@@ -243,14 +270,14 @@ func (n *NodeGroup) Nodes() ([]cloudprovider.Instance, error) {
 	var allInvalid bool
 	for i, t := range iecConfig.Tokens {
 		iecClient = iecClientGetter(t, iecConfig.Endpoint, iecConfig.Insecure)
-		nodes, err = iecClient.ListKubernetesNodes(n.clusterID, n.nodePool.ID)
+		nodes, err = iecClient.ListKubernetesNodes(n.clusterID, n.id)
 		if err != nil {
 			if profitbricks.IsStatusUnauthorized(err) {
 				klog.V(trace).Infof("Token %d invalid, trying next one", i)
 				allInvalid = true
 				continue
 			}
-			return nil, errors.Wrapf(err, "failed to get nodes for nodepool %s", n.nodePool.ID)
+			return nil, errors.Wrapf(err, "failed to get nodes for nodepool %s", n.id)
 		}
 		allInvalid = false
 		break
@@ -286,7 +313,8 @@ func (n *NodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
 // Allows to tell the theoretical node group from the real one. Implementation
 // required.
 func (n *NodeGroup) Exist() bool {
-	return n.nodePool != nil
+	nodePool, _, _ := n.getValidClientAndPool(n.clusterID, n.id, n.clientConf)
+	return nodePool != nil
 }
 
 // Create creates the node group on the cloud provider side. Implementation

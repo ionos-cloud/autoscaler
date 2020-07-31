@@ -81,29 +81,6 @@ func (_m *Client) GetKubernetesNodePool(clusterID string, nodepoolID string) (*p
 	return r0, r1
 }
 
-// ListKubernetesNodePools provides a mock function with given fields: clusterID
-func (_m *Client) ListKubernetesNodePools(clusterID string) (*profitbricks.KubernetesNodePools, error) {
-	ret := _m.Called(clusterID)
-
-	var r0 *profitbricks.KubernetesNodePools
-	if rf, ok := ret.Get(0).(func(string) *profitbricks.KubernetesNodePools); ok {
-		r0 = rf(clusterID)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*profitbricks.KubernetesNodePools)
-		}
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(string) error); ok {
-		r1 = rf(clusterID)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
 // ListKubernetesNodes provides a mock function with given fields: clusterID, nodepoolID
 func (_m *Client) ListKubernetesNodes(clusterID string, nodepoolID string) (*profitbricks.KubernetesNodes, error) {
 	ret := _m.Called(clusterID, nodepoolID)

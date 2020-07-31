@@ -6,6 +6,7 @@ node pools. This can be dynamically enabled/disabled by defining autscaler min/m
 ## Configuration
 
 The cluster autoscaler runs for clusters with at least one nodepool with defined autoscaling mix/max.
+Autoscaler configuration requires a configmap defining nodepools the autoscaler should operate on.
 
 ## Development
 
@@ -57,3 +58,7 @@ kubectl apply -f example/cluster-autoscaler-autodiscover.yaml
 ### CPC Deployment
 
 In CPC Deployment, the cluster-autoscaler retrieves the token from the secret in the cluster namespace.
+
+### Generating mocks
+
+Call `go generate` in cloudprovider/iec.

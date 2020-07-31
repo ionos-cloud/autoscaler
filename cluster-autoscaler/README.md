@@ -16,6 +16,7 @@ You should also take a look at the notes and "gotchas" for your specific cloud p
 * [Azure](./cloudprovider/azure/README.md)
 * [AWS](./cloudprovider/aws/README.md)
 * [BaiduCloud](./cloudprovider/baiducloud/README.md)
+* [IONOSEnterpriseCloud](./cloudprovider/iec/README.md)
 
 # Releases
 

@@ -1,7 +1,6 @@
 package iec
 
 import (
-	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -9,7 +8,6 @@ import (
 
 	"github.com/profitbricks/profitbricks-sdk-go/v5"
 	"github.com/stretchr/testify/assert"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/iec/mocks"
 )
 
 var (
@@ -84,6 +82,17 @@ var (
 cluster_id: "12345"
 autoscaler_secret_path: "secret-file"
 `
+	confWithNodePools = `---
+cluster_id: "12345"
+autoscaler_secret_path: "secret-file"
+nodepools:
+- id: "345"
+  autoscaling_limit_max: 5
+  autoscaling_limit_min: 1
+- id: "456"
+  autoscaling_limit_max: 10
+  autoscaling_limit_min: 1
+`
 	conf = &clientConfObj{
 		defaultToken:    "default-token",
 		insecure:        false,
@@ -103,6 +112,18 @@ func TestNewManager(t *testing.T) {
 		manager, err := CreateIECManager(strings.NewReader(minCfg))
 		assert.NoError(t, err)
 		assert.Equal(t, "12345", manager.GetClusterID(), "cluster ID does not match")
+	})
+
+	t.Run("success, manager with nodepools from config", func(t *testing.T) {
+		manager, err := CreateIECManager(strings.NewReader(confWithNodePools))
+		assert.NoError(t, err)
+		assert.Len(t, manager.GetNodeGroups(), 2)
+		assert.Equal(t, "345", manager.GetNodeGroups()[0].id)
+		assert.Equal(t, 1, manager.GetNodeGroups()[0].MinSize())
+		assert.Equal(t, 5, manager.GetNodeGroups()[0].MaxSize())
+		assert.Equal(t, "456", manager.GetNodeGroups()[1].id)
+		assert.Equal(t, 1, manager.GetNodeGroups()[1].MinSize())
+		assert.Equal(t, 10, manager.GetNodeGroups()[1].MaxSize())
 	})
 
 	t.Run("success, manager creation from env", func(t *testing.T) {
@@ -167,171 +188,4 @@ poll_interval: "3X"
 			assert.Error(t, err, "error expected")
 		})
 	}
-}
-
-func TestIECManager_Refresh(t *testing.T) {
-	t.Run("default token", func(t *testing.T) {
-		manager := IECManagerImpl{
-			secretPath: "secret-file",
-			clusterID:  "12345",
-			ionosConf:  conf,
-		}
-		ionosClient := mocks.Client{}
-		ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
-			&profitbricks.KubernetesNodePools{Items: nodePools}, nil).Once()
-
-		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
-			return &iecClient{&ionosClient}
-		}
-
-		err := manager.Refresh()
-		assert.NoError(t, err)
-		// Expect all nodegroups with autoscaling enabled
-		assert.Len(t, manager.nodeGroups, 3, "number of nodegroups do not match")
-		ionosClient.AssertExpectations(t)
-		iecClientGetter = newIECClient
-	})
-
-	t.Run("single valid token", func(t *testing.T) {
-		manager := IECManagerImpl{
-			secretPath: "secret-file",
-			clusterID:  "12345",
-			ionosConf:  confWOToken,
-		}
-		configs = func(confPath string) (map[string]IECConfig, error) {
-			return singleDCConfigMap, nil
-		}
-
-		t.Run("success, some nodegroups", func(t *testing.T) {
-			ionosClient := mocks.Client{}
-			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
-				&profitbricks.KubernetesNodePools{Items: nodePools}, nil).Once()
-
-			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
-				return &iecClient{&ionosClient}
-			}
-
-			err := manager.Refresh()
-			assert.NoError(t, err)
-			// Expect only nodegroups from dc 12345 with autoscaling enabled
-			assert.Len(t, manager.nodeGroups, 3, "number of nodegroups do not match")
-			// First nodegroup
-			assert.Equalf(t, 1, manager.nodeGroups[0].minSize,
-				"minimum node size for nodegroup %s does not match", manager.nodeGroups[0].id)
-			assert.Equalf(t, 3, manager.nodeGroups[0].maxSize,
-				"maximum node size for nodegroup %s does not match", manager.nodeGroups[0].id)
-			// Second nodegroup
-			assert.Equalf(t, 1, manager.nodeGroups[1].minSize,
-				"minimum node size for nodegroup %s does not match", manager.nodeGroups[0].id)
-			assert.Equal(t, 2, manager.nodeGroups[1].maxSize,
-				"maximum node size for nodegroup %s does not match", manager.nodeGroups[0].id)
-			ionosClient.AssertExpectations(t)
-			iecClientGetter = newIECClient
-		})
-
-		t.Run("success, no nodepools with autoscaling limits set", func(t *testing.T) {
-			ionosClient := mocks.Client{}
-			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
-				&profitbricks.KubernetesNodePools{
-					Items: nodePools[2:4]}, nil).Once()
-			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
-				return &iecClient{&ionosClient}
-			}
-
-			err := manager.Refresh()
-			assert.NoError(t, err)
-			assert.Len(t, manager.nodeGroups, 0, "number of nodegroups do not match")
-			ionosClient.AssertExpectations(t)
-			iecClientGetter = newIECClient
-		})
-
-		t.Run("success, no nodepools", func(t *testing.T) {
-			ionosClient := mocks.Client{}
-			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
-				&profitbricks.KubernetesNodePools{
-					Items: []profitbricks.KubernetesNodePool{}}, nil).Once()
-			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
-				return &iecClient{&ionosClient}
-			}
-
-			err := manager.Refresh()
-			assert.NoError(t, err)
-			assert.Len(t, manager.nodeGroups, 0, "number of nodegroups do not match")
-			ionosClient.AssertExpectations(t)
-			iecClientGetter = newIECClient
-		})
-
-		t.Run("failure, error getting nodepools", func(t *testing.T) {
-			ionosClient := mocks.Client{}
-			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
-				nil, defaultError).Once()
-
-			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
-				return &iecClient{&ionosClient}
-			}
-			err := manager.Refresh()
-			assert.Error(t, err)
-			assert.Nil(t, manager.nodeGroups, "nodegroups must be nil")
-			ionosClient.AssertExpectations(t)
-			iecClientGetter = newIECClient
-		})
-		configs = getIECConfigs
-	})
-
-	t.Run("multiple tokens", func(t *testing.T) {
-		configs = func(confPath string) (map[string]IECConfig, error) {
-			return sDCmTokenConfigMap, nil
-		}
-
-		t.Run("success, first token invalid", func(t *testing.T) {
-			manager := IECManagerImpl{
-				secretPath: "secret-file",
-				clusterID:  "12345",
-				ionosConf:  confWOToken,
-			}
-			ionosClient := mocks.Client{}
-			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
-				nil, profitbricks.ApiError{
-					HTTPStatus: http.StatusUnauthorized,
-				}).Once()
-			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
-				&profitbricks.KubernetesNodePools{Items: nodePools}, nil).Once()
-
-			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
-				return &iecClient{&ionosClient}
-			}
-
-			err := manager.Refresh()
-			assert.NoError(t, err)
-			ionosClient.AssertExpectations(t)
-		})
-
-		t.Run("failure, all tokens invalid", func(t *testing.T) {
-			manager := IECManagerImpl{
-				secretPath: "secret-file",
-				clusterID:  "12345",
-				ionosConf:  confWOToken,
-			}
-			ionosClient := mocks.Client{}
-			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
-				nil, profitbricks.ApiError{
-					HTTPStatus: http.StatusUnauthorized,
-				}).Once()
-			ionosClient.On("ListKubernetesNodePools", manager.clusterID).Return(
-				nil, profitbricks.ApiError{
-					HTTPStatus: http.StatusUnauthorized,
-				}).Once()
-
-			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
-				return &iecClient{&ionosClient}
-			}
-
-			err := manager.Refresh()
-			assert.Error(t, err)
-			assert.Nil(t, manager.nodeGroups, "nodegroups must be nil")
-			assert.Contains(t, err.Error(), "errors for all tokens")
-			ionosClient.AssertExpectations(t)
-		})
-		configs = getIECConfigs
-	})
 }

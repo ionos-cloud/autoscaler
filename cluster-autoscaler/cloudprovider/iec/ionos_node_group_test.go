@@ -43,25 +43,25 @@ var (
 	}
 )
 
-func testNodeGroup(clientConf *clientConfObj, inp *profitbricks.KubernetesNodePool) NodeGroup {
+func testNodeGroup(clientConf *clientConfObj, inp *NodePool) NodeGroup {
 	var minNodes, maxNodes int
 	var id string
 	if inp != nil {
-		minNodes = int(*inp.Properties.AutoScaling.MinNodeCount)
-		maxNodes = int(*inp.Properties.AutoScaling.MaxNodeCount)
+		minNodes = inp.AutoscalingLimitMin
+		maxNodes = inp.AutoscalingLimitMax
 	}
 	if inp != nil {
 		id = inp.ID
 	}
 
 	return NodeGroup{
-		id:         id,
-		clusterID:  "12345",
-		clientConf: clientConf,
-		nodePool:   inp,
-		minSize:    minNodes,
-		maxSize:    maxNodes,
-		cache:      instanceCache{data: make(map[string]cloudprovider.Instance)},
+		id:                 id,
+		clusterID:          "12345",
+		clientConf:         clientConf,
+		minSize:            minNodes,
+		maxSize:            maxNodes,
+		cache:              instanceCache{data: make(map[string]cloudprovider.Instance)},
+		deletionInProgress: wipLock{},
 	}
 }
 
@@ -84,7 +84,7 @@ func initIONOSNodePool(nodecount, min, max uint32, id, state string) *profitbric
 	return np
 }
 
-func initNodeGroup(size, min, max uint32, clientConf *clientConfObj) NodeGroup {
+func initNodeGroup(size, min, max uint32, clientConf *clientConfObj) (NodeGroup, *profitbricks.KubernetesNodePool) {
 	if clientConf == nil {
 		clientConf = &clientConfObj{
 			defaultToken:    "default-token",
@@ -92,17 +92,43 @@ func initNodeGroup(size, min, max uint32, clientConf *clientConfObj) NodeGroup {
 			iecPollInterval: 10 * time.Millisecond,
 		}
 	}
-	return testNodeGroup(clientConf, initIONOSNodePool(size, min, max, "123", profitbricks.StateAvailable))
+	inp := initIONOSNodePool(size, min, max, "123", profitbricks.StateAvailable)
+	np := NodePool{
+		ID:                  inp.ID,
+		AutoscalingLimitMax: int(*inp.Properties.AutoScaling.MaxNodeCount),
+		AutoscalingLimitMin: int(*inp.Properties.AutoScaling.MinNodeCount),
+	}
+	return testNodeGroup(clientConf, &np), inp
 }
 
 func TestNodeGroup_Target_size(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		numberOfNodes := uint32(3)
-		ng := initNodeGroup(numberOfNodes, 1, 3, nil)
+		numberOfNodes := 3
+		ionosClient := &mocks.Client{}
+		ng, np := initNodeGroup(uint32(numberOfNodes), 1, 3, nil)
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil)
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
+			return &iecClient{ionosClient}
+		}
 
 		size, err := ng.TargetSize()
 		assert.NoError(t, err)
 		assert.EqualValues(t, numberOfNodes, size, "target size is not correct")
+		ionosClient.AssertExpectations(t)
+		iecClientGetter = newIECClient
+	})
+	t.Run("fail", func(t *testing.T) {
+		ionosClient := &mocks.Client{}
+		ng, _ := initNodeGroup(1, 1, 3, nil)
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).Return(nil, defaultError)
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
+			return &iecClient{ionosClient}
+		}
+		_, err := ng.TargetSize()
+		assert.Error(t, err)
+		ionosClient.AssertExpectations(t)
+		iecClientGetter = newIECClient
 	})
 }
 
@@ -111,7 +137,7 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 		delta := uint32(7)
 		numberOfNodes := uint32(3)
 		ionosClient := &mocks.Client{}
-		ng := initNodeGroup(numberOfNodes, 1, 10, nil)
+		ng, np := initNodeGroup(numberOfNodes, 1, 10, nil)
 
 		newCount := numberOfNodes + delta
 		update := &profitbricks.KubernetesNodePool{
@@ -121,12 +147,14 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 		}
 		updated := initIONOSNodePool(newCount, 1, 10, "123", profitbricks.StateAvailable)
 
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Once()
 		ionosClient.On("UpdateKubernetesNodePool", ng.clusterID, ng.id, *update).
 			Return(updated, nil).Once()
 		// Poll 5 times before it became true
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
-			Return(ng.nodePool, nil).Times(5)
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Times(5)
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
 			Return(updated, nil).Twice()
 		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
@@ -141,7 +169,7 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 	t.Run("failure, negative increase", func(t *testing.T) {
 		delta := -1
 		numberOfNodes := uint32(3)
-		ng := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ng, _ := initNodeGroup(numberOfNodes, 1, 3, nil)
 
 		err := ng.IncreaseSize(delta)
 		assert.Error(t, err, "error expected")
@@ -152,7 +180,7 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 		configs = func(confPath string) (map[string]IECConfig, error) {
 			return nil, defaultError
 		}
-		ng := initNodeGroup(uint32(2), 1, 3, &clientConfObj{})
+		ng, _ := initNodeGroup(uint32(2), 1, 3, &clientConfObj{})
 		err := ng.IncreaseSize(1)
 		assert.Error(t, err, "error expected")
 		assert.Contains(t, err.Error(), "error getting IECClient config", "wrong error")
@@ -162,7 +190,7 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 	t.Run("failure, zero increase", func(t *testing.T) {
 		delta := 0
 		numberOfNodes := uint32(3)
-		ng := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ng, _ := initNodeGroup(numberOfNodes, 1, 3, nil)
 
 		err := ng.IncreaseSize(delta)
 		assert.Error(t, err, "expected error")
@@ -172,18 +200,26 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 	t.Run("failure, increase above maximum", func(t *testing.T) {
 		delta := 8
 		numberOfNodes := uint32(3)
-		ng := initNodeGroup(numberOfNodes, 1, 10, nil)
+		ng, np := initNodeGroup(numberOfNodes, 1, 10, nil)
+		ionosClient := &mocks.Client{}
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil)
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
+			return &iecClient{ionosClient}
+		}
 
 		err := ng.IncreaseSize(delta)
 		assert.Error(t, err, "error expected")
 		assert.Contains(t, err.Error(), "size increase is too large", "wrong error")
+		ionosClient.AssertExpectations(t)
+		iecClientGetter = newIECClient
 	})
 
 	t.Run("failure, PollNodePoolNodeCount fails", func(t *testing.T) {
 		delta := uint32(2)
 		numberOfNodes := uint32(1)
 		ionosClient := &mocks.Client{}
-		ng := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ng, np := initNodeGroup(numberOfNodes, 1, 3, nil)
 
 		newCount := numberOfNodes + delta
 		update := &profitbricks.KubernetesNodePool{
@@ -195,12 +231,14 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 
 		pollError := errors.New("Oops something went wrong")
 
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Once()
 		ionosClient.On("UpdateKubernetesNodePool", ng.clusterID, ng.id, *update).
 			Return(updated, nil).Once()
 		// Poll 5 times before it errors
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
-			Return(ng.nodePool, nil).Times(4)
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Times(4)
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
 			Return(nil, pollError).Once()
 		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
@@ -217,7 +255,7 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 		delta := uint32(2)
 		numberOfNodes := uint32(1)
 		ionosClient := &mocks.Client{}
-		ng := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ng, np := initNodeGroup(numberOfNodes, 1, 3, nil)
 
 		newCount := numberOfNodes + delta
 		update := &profitbricks.KubernetesNodePool{
@@ -227,9 +265,11 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 		}
 		updated := initIONOSNodePool(newCount, 1, 3, "123", profitbricks.StateAvailable)
 
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Once()
 		ionosClient.On("UpdateKubernetesNodePool", ng.clusterID, ng.id, *update).
 			Return(updated, nil).Once()
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
 			Return(nil, defaultError)
 		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
@@ -244,13 +284,15 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 
 	t.Run("failure, update kubernetes nodepool failed", func(t *testing.T) {
 		delta := 1
+		ng, np := initNodeGroup(2, 1, 3, nil)
 		ionosClient := &mocks.Client{}
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Once()
 		ionosClient.On("UpdateKubernetesNodePool", mock.Anything, mock.Anything, mock.Anything).Return(
 			nil, defaultError).Once()
 		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
 		}
-		ng := initNodeGroup(2, 1, 3, nil)
 
 		err := ng.IncreaseSize(delta)
 		assert.Error(t, err, "error expected")
@@ -263,7 +305,7 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 		delta := uint32(2)
 		numberOfNodes := uint32(3)
 		ionosClient := &mocks.Client{}
-		ng := initNodeGroup(numberOfNodes, 1, 5, nil)
+		ng, np := initNodeGroup(numberOfNodes, 1, 5, nil)
 
 		newCount := numberOfNodes + delta
 		update := &profitbricks.KubernetesNodePool{
@@ -272,14 +314,16 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 			},
 		}
 		updated := initIONOSNodePool(newCount, 1, 5, "123", profitbricks.StateAvailable)
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Once()
 		ionosClient.On("UpdateKubernetesNodePool", ng.clusterID, ng.id, *update).
 			Return(updated, nil).Once()
 		// Poll 5 times before it became true
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
-			Return(ng.nodePool, nil).Times(5)
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Times(5)
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
 			Return(updated, nil).Once()
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
 			Return(nil, defaultError).Once()
 		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
@@ -300,7 +344,7 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 			delta := uint32(1)
 			numberOfNodes := uint32(1)
 			ionosClient := &mocks.Client{}
-			ng := initNodeGroup(numberOfNodes, 1, 3, &clientConfObj{})
+			ng, np := initNodeGroup(numberOfNodes, 1, 3, &clientConfObj{})
 
 			newCount := numberOfNodes + delta
 			update := &profitbricks.KubernetesNodePool{
@@ -310,12 +354,14 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 			}
 			updated := initIONOSNodePool(newCount, 1, 10, "123", profitbricks.StateAvailable)
 			// First token invalid
-			ionosClient.On("UpdateKubernetesNodePool", ng.clusterID, ng.id, *update).
+			ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
 				Return(nil, profitbricks.ApiError{HTTPStatus: http.StatusUnauthorized}).Once()
 			// Second is fine
+			ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+				Return(np, nil).Once()
 			ionosClient.On("UpdateKubernetesNodePool", ng.clusterID, ng.id, *update).
 				Return(updated, nil).Once()
-			ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
+			ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
 				Return(updated, nil).Twice()
 			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 				return &iecClient{ionosClient}
@@ -331,16 +377,10 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 			delta := uint32(1)
 			numberOfNodes := uint32(1)
 			ionosClient := &mocks.Client{}
-			ng := initNodeGroup(numberOfNodes, 1, 3, &clientConfObj{})
+			ng, _ := initNodeGroup(numberOfNodes, 1, 3, &clientConfObj{})
 
-			newCount := numberOfNodes + delta
-			update := &profitbricks.KubernetesNodePool{
-				Properties: &profitbricks.KubernetesNodePoolProperties{
-					NodeCount: newCount,
-				},
-			}
 			// First token invalid
-			ionosClient.On("UpdateKubernetesNodePool", ng.clusterID, ng.id, *update).
+			ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
 				Return(nil, profitbricks.ApiError{HTTPStatus: http.StatusUnauthorized}).Twice()
 			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 				return &iecClient{ionosClient}
@@ -357,19 +397,43 @@ func TestNodeGroup_IncreaseSize(t *testing.T) {
 }
 
 func TestNodeGroup_DecreaseTargetSize(t *testing.T) {
+	t.Run("failure, failed to get nodepool", func(t *testing.T) {
+		ng, _ := initNodeGroup(uint32(1), 1, 3, nil)
+		ionosClient := &mocks.Client{}
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(nil, defaultError)
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
+			return &iecClient{ionosClient}
+		}
+
+		err := ng.DecreaseTargetSize(-1)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get nodepool", "wrong error")
+		ionosClient.AssertExpectations(t)
+		iecClientGetter = newIECClient
+	})
+
 	t.Run("failure, unsupported", func(t *testing.T) {
 		numberOfNodes := uint32(3)
-		ng := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ng, np := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ionosClient := &mocks.Client{}
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil)
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
+			return &iecClient{ionosClient}
+		}
 
 		err := ng.DecreaseTargetSize(-1)
 		assert.Error(t, err, "error expected")
 		assert.Contains(t, err.Error(), "Currently not supported behavior", "wrong error")
+		ionosClient.AssertExpectations(t)
+		iecClientGetter = newIECClient
 	})
 
 	t.Run("failure, positive decrease", func(t *testing.T) {
 		delta := 2
 		numberOfNodes := uint32(3)
-		ng := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ng, _ := initNodeGroup(numberOfNodes, 1, 3, nil)
 
 		err := ng.DecreaseTargetSize(delta)
 		assert.Error(t, err, "error expected")
@@ -379,7 +443,7 @@ func TestNodeGroup_DecreaseTargetSize(t *testing.T) {
 	t.Run("failure, zero decrease", func(t *testing.T) {
 		delta := 0
 		numberOfNodes := uint32(3)
-		ng := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ng, _ := initNodeGroup(numberOfNodes, 1, 3, nil)
 
 		err := ng.DecreaseTargetSize(delta)
 		assert.Error(t, err, "error expected")
@@ -389,11 +453,19 @@ func TestNodeGroup_DecreaseTargetSize(t *testing.T) {
 	t.Run("failure, decrease below minimum", func(t *testing.T) {
 		delta := -3
 		numberOfNodes := uint32(3)
-		ng := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ng, np := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ionosClient := &mocks.Client{}
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil)
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
+			return &iecClient{ionosClient}
+		}
 
 		err := ng.DecreaseTargetSize(delta)
 		assert.Error(t, err, "error expected")
 		assert.Contains(t, err.Error(), "size decrease is too small.", "wrong error")
+		ionosClient.AssertExpectations(t)
+		iecClientGetter = newIECClient
 	})
 }
 
@@ -418,30 +490,33 @@ func TestNodeGroup_DeleteNodes(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		ionosClient := &mocks.Client{}
-		ng := initNodeGroup(4, 1, 4, nil)
+		ng, np := initNodeGroup(4, 1, 4, nil)
 		instances := []cloudprovider.Instance{}
 		for _, n := range nodes {
 			instances = append(instances, cloudprovider.Instance{Id: n.Spec.ProviderID})
 		}
 		ng.cache.addInstances(instances)
-		count := ng.nodePool.Properties.NodeCount
-		min := *ng.nodePool.Properties.AutoScaling.MinNodeCount
-		max := *ng.nodePool.Properties.AutoScaling.MaxNodeCount
-		id := ng.nodePool.ID
-		state := ng.nodePool.Metadata.State
+		count := np.Properties.NodeCount
+		min := *np.Properties.AutoScaling.MinNodeCount
+		max := *np.Properties.AutoScaling.MaxNodeCount
+		id := ng.id
+		state := np.Metadata.State
 		// Delete first node,
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Once()
 		ionosClient.On("DeleteKubernetesNode", ng.clusterID, ng.id, "1").Return(&http.Header{}, nil).Once()
 		// Poll 5 times before success
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
-			Return(initIONOSNodePool(count, min, max, id, state), nil).Times(5)
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
-			Return(initIONOSNodePool(count-1, min, max, id, state), nil).Once()
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Times(5)
+		oneDeleted := initIONOSNodePool(count-1, min, max, id, state)
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(oneDeleted, nil).Once()
 		// Delete second node
 		ionosClient.On("DeleteKubernetesNode", ng.clusterID, ng.id, "2").Return(&http.Header{}, nil).Once()
 		// Poll 5 times before success
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
-			Return(initIONOSNodePool(count-1, min, max, id, state), nil).Times(5)
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(oneDeleted, nil).Times(5)
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
 			Return(initIONOSNodePool(count-2, min, max, id, state), nil).Once()
 		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
@@ -458,7 +533,10 @@ func TestNodeGroup_DeleteNodes(t *testing.T) {
 
 	t.Run("ionosClient node deletion fails", func(t *testing.T) {
 		ionosClient := &mocks.Client{}
-		ng := initNodeGroup(4, 1, 4, nil)
+		ng, np := initNodeGroup(4, 1, 4, nil)
+		// Get nodepool
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Once()
 		// Fail on first node
 		ionosClient.On("DeleteKubernetesNode", ng.clusterID, ng.id, "1").
 			Return(&http.Header{}, errors.New("oops something went wrong.")).Once()
@@ -474,11 +552,14 @@ func TestNodeGroup_DeleteNodes(t *testing.T) {
 
 	t.Run("ionosClient poll fails", func(t *testing.T) {
 		ionosClient := &mocks.Client{}
-		ng := initNodeGroup(3, 1, 3, nil)
+		ng, np := initNodeGroup(3, 1, 3, nil)
+		// Get nodepool
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil).Once()
 		// Delete first node
 		ionosClient.On("DeleteKubernetesNode", ng.clusterID, ng.id, "1").Return(&http.Header{}, nil).Once()
 		// Poll never succeeds
-		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
 			Return(nil, defaultError)
 		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 			return &iecClient{ionosClient}
@@ -495,7 +576,7 @@ func TestNodeGroup_DeleteNodes(t *testing.T) {
 		configs = func(confPath string) (map[string]IECConfig, error) {
 			return nil, defaultError
 		}
-		ng := initNodeGroup(uint32(2), 1, 3, &clientConfObj{})
+		ng, _ := initNodeGroup(uint32(2), 1, 3, &clientConfObj{})
 		err := ng.DeleteNodes(nodes)
 		assert.Error(t, err, "error expected")
 		assert.Contains(t, err.Error(), "error getting IECClient config", "wrong error")
@@ -508,17 +589,20 @@ func TestNodeGroup_DeleteNodes(t *testing.T) {
 		}
 		t.Run("success, first token invalid", func(t *testing.T) {
 			ionosClient := &mocks.Client{}
-			ng := initNodeGroup(4, 1, 4, &clientConfObj{})
-			count := ng.nodePool.Properties.NodeCount
-			min := *ng.nodePool.Properties.AutoScaling.MinNodeCount
-			max := *ng.nodePool.Properties.AutoScaling.MaxNodeCount
-			id := ng.nodePool.ID
-			state := ng.nodePool.Metadata.State
+			ng, np := initNodeGroup(4, 1, 4, &clientConfObj{})
+			count := np.Properties.NodeCount
+			min := *np.Properties.AutoScaling.MinNodeCount
+			max := *np.Properties.AutoScaling.MaxNodeCount
+			id := ng.id
+			state := np.Metadata.State
+			// Get nodepool, fail on first token
+			ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+				Return(nil, profitbricks.ApiError{HTTPStatus: http.StatusUnauthorized}).Once()
+			ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+				Return(np, nil).Once()
 			// Delete node,
-			ionosClient.On("DeleteKubernetesNode", ng.clusterID, ng.id, "1").Return(
-				nil, profitbricks.ApiError{HTTPStatus: http.StatusUnauthorized}).Once()
 			ionosClient.On("DeleteKubernetesNode", ng.clusterID, ng.id, "1").Return(&http.Header{}, nil).Once()
-			ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.nodePool.ID).
+			ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
 				Return(initIONOSNodePool(count-1, min, max, id, state), nil).Once()
 			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 				return &iecClient{ionosClient}
@@ -531,10 +615,10 @@ func TestNodeGroup_DeleteNodes(t *testing.T) {
 
 		t.Run("failed, all tokens invalid", func(t *testing.T) {
 			ionosClient := &mocks.Client{}
-			ng := initNodeGroup(4, 1, 4, &clientConfObj{})
-			// Delete node,
-			ionosClient.On("DeleteKubernetesNode", ng.clusterID, ng.id, "1").Return(
-				nil, profitbricks.ApiError{HTTPStatus: http.StatusUnauthorized}).Twice()
+			ng, _ := initNodeGroup(4, 1, 4, &clientConfObj{})
+			// Get nodepool, fail on both tokens
+			ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+				Return(nil, profitbricks.ApiError{HTTPStatus: http.StatusUnauthorized}).Twice()
 			iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
 				return &iecClient{ionosClient}
 			}
@@ -550,11 +634,11 @@ func TestNodeGroup_DeleteNodes(t *testing.T) {
 
 func TestNodeGroup_Nodes(t *testing.T) {
 	numberOfNodes := uint32(5)
-	ng := initNodeGroup(numberOfNodes, 1, 5, nil)
+	ng, _ := initNodeGroup(numberOfNodes, 1, 5, nil)
 
 	t.Run("success, with state mapping", func(t *testing.T) {
 		ionosClient := &mocks.Client{}
-		ionosClient.On("ListKubernetesNodes", ng.clusterID, ng.nodePool.ID).Return(
+		ionosClient.On("ListKubernetesNodes", ng.clusterID, ng.id).Return(
 			&profitbricks.KubernetesNodes{
 				Items: kubernetesNodes,
 			}, nil).Once()
@@ -572,15 +656,6 @@ func TestNodeGroup_Nodes(t *testing.T) {
 		}
 		ionosClient.AssertExpectations(t)
 		iecClientGetter = newIECClient
-	})
-
-	t.Run("failure (nil node pool)", func(t *testing.T) {
-		ng := testNodeGroup(&clientConfObj{}, nil)
-
-		res, err := ng.Nodes()
-		assert.Nil(t, res, "expected nil")
-		assert.Error(t, err, "error expected")
-		assert.Contains(t, err.Error(), "node pool instance is not created", "wrong error")
 	})
 
 	t.Run("failure (iecClient GetNodes fails)", func(t *testing.T) {
@@ -603,7 +678,7 @@ func TestNodeGroup_Nodes(t *testing.T) {
 		configs = func(confPath string) (map[string]IECConfig, error) {
 			return nil, defaultError
 		}
-		ng := initNodeGroup(uint32(2), 1, 3, &clientConfObj{})
+		ng, _ := initNodeGroup(uint32(2), 1, 3, &clientConfObj{})
 		res, err := ng.Nodes()
 		assert.Nil(t, res, "expected nil")
 		assert.Error(t, err, "error expected")
@@ -617,10 +692,10 @@ func TestNodeGroup_Nodes(t *testing.T) {
 			configs = func(confPath string) (map[string]IECConfig, error) {
 				return sDCmTokenConfigMap, nil
 			}
-			ng := initNodeGroup(1, 1, 5, &clientConfObj{})
-			ionosClient.On("ListKubernetesNodes", ng.clusterID, ng.nodePool.ID).Return(
+			ng, _ := initNodeGroup(1, 1, 5, &clientConfObj{})
+			ionosClient.On("ListKubernetesNodes", ng.clusterID, ng.id).Return(
 				nil, profitbricks.ApiError{HTTPStatus: http.StatusUnauthorized}).Once()
-			ionosClient.On("ListKubernetesNodes", ng.clusterID, ng.nodePool.ID).Return(
+			ionosClient.On("ListKubernetesNodes", ng.clusterID, ng.id).Return(
 				&profitbricks.KubernetesNodes{
 					Items: kubernetesNodes,
 				}, nil).Once()
@@ -637,7 +712,7 @@ func TestNodeGroup_Nodes(t *testing.T) {
 
 		t.Run("failed, all tokens invalid", func(t *testing.T) {
 			ionosClient := &mocks.Client{}
-			ng := initNodeGroup(4, 1, 4, &clientConfObj{})
+			ng, _ := initNodeGroup(4, 1, 4, &clientConfObj{})
 			// Delete node,
 			ionosClient.On("ListKubernetesNodes", ng.clusterID, ng.id).Return(
 				nil, profitbricks.ApiError{HTTPStatus: http.StatusUnauthorized}).Twice()
@@ -657,7 +732,7 @@ func TestNodeGroup_Nodes(t *testing.T) {
 func TestNodeGroup_Debug(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		numberOfNodes := uint32(3)
-		ng := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ng, _ := initNodeGroup(numberOfNodes, 1, 3, nil)
 
 		d := ng.Debug()
 		exp := "cluster ID: 12345, nodegroup ID: 123 (min: 1, max: 3)"
@@ -668,40 +743,56 @@ func TestNodeGroup_Debug(t *testing.T) {
 func TestNodeGroup_Exist(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		numberOfNodes := uint32(3)
-		ng := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ng, np := initNodeGroup(numberOfNodes, 1, 3, nil)
+		ionosClient := &mocks.Client{}
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(np, nil)
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
+			return &iecClient{ionosClient}
+		}
 		exist := ng.Exist()
 		assert.Equal(t, true, exist, "node pool should exist")
+		ionosClient.AssertExpectations(t)
+		iecClientGetter = newIECClient
 	})
 
 	t.Run("failure", func(t *testing.T) {
-		ng := testNodeGroup(&clientConfObj{}, nil)
+		ng, _ := initNodeGroup(1, 1, 3, nil)
+		ionosClient := &mocks.Client{}
+		ionosClient.On("GetKubernetesNodePool", ng.clusterID, ng.id).
+			Return(nil, nil)
+		iecClientGetter = func(token, endpoint string, insecure bool) *iecClient {
+			return &iecClient{ionosClient}
+		}
 		exist := ng.Exist()
 		assert.Equal(t, false, exist, "node pool should not exist")
+		ionosClient.AssertExpectations(t)
+		iecClientGetter = newIECClient
 	})
 }
 
 func TestNodeGroup_TemplateNodeInfo(t *testing.T) {
-	ng := initNodeGroup(1, 1, 3, nil)
+	ng, _ := initNodeGroup(1, 1, 3, nil)
 	ret, err := ng.TemplateNodeInfo()
 	assert.Nil(t, ret)
 	assert.Equal(t, err, cloudprovider.ErrNotImplemented)
 }
 
 func TestNodeGroup_Autoprovisioned(t *testing.T) {
-	ng := initNodeGroup(1, 1, 3, nil)
+	ng, _ := initNodeGroup(1, 1, 3, nil)
 	ret := ng.Autoprovisioned()
 	assert.False(t, ret)
 }
 
 func TestNodeGroup_Create(t *testing.T) {
-	ng := initNodeGroup(1, 1, 3, nil)
+	ng, _ := initNodeGroup(1, 1, 3, nil)
 	ret, err := ng.Create()
 	assert.Nil(t, ret)
 	assert.Equal(t, err, cloudprovider.ErrNotImplemented)
 }
 
 func TestNodeGroup_Delete(t *testing.T) {
-	ng := initNodeGroup(1, 1, 3, nil)
+	ng, _ := initNodeGroup(1, 1, 3, nil)
 	err := ng.Delete()
 	assert.Equal(t, err, cloudprovider.ErrNotImplemented)
 }

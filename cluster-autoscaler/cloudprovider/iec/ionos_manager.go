@@ -1,7 +1,6 @@
 package iec
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"strconv"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
-	"github.com/profitbricks/profitbricks-sdk-go/v5"
 	"gopkg.in/yaml.v2"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/klog"
@@ -46,7 +44,7 @@ const (
 	DefaultInterval      = 30 * time.Second
 )
 
-//go:generate mockery -name IECManager -inpkg -case snake -dir ./cloudprovider/iec -output ./cloudprovider/iec -testonly
+//go:generate mockery -name IECManager -inpkg -case snake -dir . -output . -testonly
 type IECManager interface {
 	// Refresh triggers refresh of cached resources.
 	Refresh() error
@@ -56,6 +54,15 @@ type IECManager interface {
 	GetNodeGroups() []*NodeGroup
 	// GetClusterID
 	GetClusterID() string
+}
+
+type NodePool struct {
+	// ID is the IONOS nodepool id
+	ID string `yaml:"id"`
+	// AutoscalingLimitMax is the upper limit for the autoscaler
+	AutoscalingLimitMax int `yaml:"autoscaling_limit_max"`
+	// AutoscalingLimitMin is the lower limit for the autoscaler
+	AutoscalingLimitMin int `yaml:"autoscaling_limit_min"`
 }
 
 type Config struct {
@@ -85,6 +92,9 @@ type Config struct {
 	// IONOSConnectionInsecure whether the iecClient created from the default token should us an insecure connection.
 	// Only applied if DefaultIONOSToken is set.
 	DefaultIONOSConInsecure bool `yaml:"ionos_connection_insecure"`
+
+	// NodePools is a list of NodePools the autoscaler should work on
+	NodePools []NodePool `yaml:"nodepools"`
 }
 
 func (c *Config) valid() (err error) {
@@ -107,7 +117,7 @@ func (c *Config) valid() (err error) {
 		c.DefaultIONOSConInsecure = v
 	}
 
-	if c.AutoscalerSecretPath == "" {
+	if c.AutoscalerSecretPath == "" && c.DefaultIONOSToken == "" {
 		if value, ok := os.LookupEnv(EnvIONOSSecretPath); ok {
 			c.AutoscalerSecretPath = value
 		} else {
@@ -158,6 +168,25 @@ var (
 	createIECManager = CreateIECManager
 )
 
+func (m IECManagerImpl) initNodeGroups(nodePools []NodePool) []*NodeGroup {
+	klog.V(info).Infof("Autoscaler operating on %d nodepools: %+v", len(nodePools), nodePools)
+	nodeGroups := make([]*NodeGroup, len(nodePools))
+	for i, np := range nodePools {
+		nodeGroup := NodeGroup{
+			id:                 np.ID,
+			clusterID:          m.clusterID,
+			clientConf:         m.ionosConf,
+			minSize:            np.AutoscalingLimitMin,
+			maxSize:            np.AutoscalingLimitMax,
+			cache:              instanceCache{data: map[string]cloudprovider.Instance{}},
+			deletionInProgress: wipLock{},
+		}
+		nodeGroups[i] = &nodeGroup
+		klog.V(trace).Infof("Created from nodepool %s: %+v", np.ID, nodeGroup)
+	}
+	return nodeGroups
+}
+
 func CreateIECManager(configReader io.Reader) (IECManager, error) {
 	klog.V(debug).Info("Creating IEC manager")
 	cfg := &Config{}
@@ -178,7 +207,6 @@ func CreateIECManager(configReader io.Reader) (IECManager, error) {
 	m := &IECManagerImpl{
 		secretPath: cfg.AutoscalerSecretPath,
 		clusterID:  cfg.ClusterID,
-		nodeGroups: make([]*NodeGroup, 0),
 		ionosConf: &clientConfObj{
 			confPath:        cfg.AutoscalerSecretPath,
 			defaultToken:    cfg.DefaultIONOSToken,
@@ -188,6 +216,8 @@ func CreateIECManager(configReader io.Reader) (IECManager, error) {
 		},
 		interrupt: make(chan struct{}),
 	}
+
+	m.nodeGroups = m.initNodeGroups(cfg.NodePools)
 
 	go wait.Until(func() {
 		for _, ng := range m.nodeGroups {
@@ -203,142 +233,10 @@ func (m IECManagerImpl) Cleanup() {
 	close(m.interrupt)
 }
 
-func (m IECManagerImpl) processDC(dataCenterID string, iecConfig IECConfig) ([]*NodeGroup, error) {
-	var (
-		nodePools *profitbricks.KubernetesNodePools
-		listError error
-		groups    []*NodeGroup
-	)
-	if dataCenterID != "" {
-		klog.V(debug).Infof("Working on datacenter %s.", dataCenterID)
-	}
-	var invalid error
-	// For all tokens for datacenter
-	for _, t := range iecConfig.Tokens {
-		// Try to get a vaild token
-		client := iecClientGetter(t, iecConfig.Endpoint, iecConfig.Insecure)
-		nodePools, listError = client.ListKubernetesNodePools(m.clusterID)
-		if listError != nil {
-			// if unauthorized try next token
-			if profitbricks.IsStatusUnauthorized(listError) {
-				klog.V(trace).Infof("Token invalid, trying next one")
-				invalid = listError
-				continue
-			}
-			// any other error, work on next dc
-			invalid = nil
-			break
-		}
-		if nodePools != nil {
-			invalid = nil
-			break
-		}
-	}
-
-	if invalid != nil {
-		listError = fmt.Errorf("errors for all tokens: %+v", invalid)
-	}
-	if nodePools != nil {
-		for _, nodePool := range nodePools.Items {
-			klog.V(debug).Infof("Processing nodepool: %s", nodePool.ID)
-			if nodePool.Properties.AutoScaling == nil || !nodePool.Properties.AutoScaling.Enabled() {
-				klog.V(debug).Infof("Autoscaling for nodepool %s is disabled, skipping", nodePool.ID)
-				continue
-			}
-			if dataCenterID != "" && nodePool.Properties.DatacenterID != dataCenterID {
-				klog.V(debug).Infof(
-					"Found nodepool in DC %s different from tokens dc %s, skipping", nodePool.Properties.DatacenterID, dataCenterID)
-				continue
-			}
-			np := nodePool
-			instanceCache := instanceCache{data: make(map[string]cloudprovider.Instance)}
-			for _, ng := range m.nodeGroups {
-				if ng.id == nodePool.ID {
-					instanceCache.data = ng.cache.getData()
-					break
-				}
-			}
-			groups = append(groups, &NodeGroup{
-				id:         nodePool.ID,
-				clusterID:  m.clusterID,
-				clientConf: m.ionosConf,
-				nodePool:   &np,
-				minSize:    int(*nodePool.Properties.AutoScaling.MinNodeCount),
-				maxSize:    int(*nodePool.Properties.AutoScaling.MaxNodeCount),
-				cache:      instanceCache,
-			})
-			klog.V(debug).Infof("Added group for node pool %q name: %s", nodePool.ID, nodePool.Properties.Name)
-		}
-	} else if listError != nil {
-		klog.Errorf("error getting any nodegroup: %v", listError.Error())
-	}
-	return groups, listError
-}
-
 // Refreshes the cache holding the nodegroups. This is called by the CA based
 // on the `--scan-interval`. By default it's 10 seconds.
 func (m *IECManagerImpl) Refresh() error {
-	klog.V(debug).Info("Refreshing")
-	var res *multierror.Error
-	var groups []*NodeGroup
-	var groupIDs []string
-
-	// Fixed behaviour, make only one request for all DCs and use the first working
-	// token out of the list of all tokens from all DCs.
-	iecConfig, err := m.ionosConf.getIECConfig("")
-	if err != nil {
-		return err
-	}
-	if m.ionosConf.defaultToken == "" {
-		tokens := []string{}
-		iecConfigs, err := configs(m.ionosConf.confPath)
-		if err != nil {
-			return err
-		}
-		for _, conf := range iecConfigs {
-			tokens = append(tokens, conf.Tokens...)
-		}
-		iecConfig.Tokens = tokens
-	}
-	groups, err = m.processDC("", *iecConfig)
-	res = multierror.Append(res, err)
-
-	// Intended,  make one requests per DC and use DC's tokens for this request.
-	//	if m.ionosConf.defaultToken != "" {
-	//		// Default token set
-	//		iecConfig, err := m.ionosConf.getIECConfig("")
-	//		if err != nil {
-	//			return err
-	//		}
-	//		groups, err = processDC("", m.clusterID, m.ionosConf, *iecConfig)
-	//		res = multierror.Append(res, err)
-	//	} else {
-	//		iecConfigs, err := configs(m.ionosConf.confPath)
-	//		if err != nil {
-	//			return err
-	//		}
-	//
-	//		// For all datacenters in config
-	//		var dcGroups []*NodeGroup
-	//		for dataCenterID, iecConfig := range iecConfigs {
-	//			dcGroups, err = processDC(dataCenterID, m.clusterID, m.ionosConf, iecConfig)
-	//			res = multierror.Append(res, err)
-	//			groups = append(groups, dcGroups...)
-	//		}
-	//	}
-	if len(groups) == 0 {
-		klog.V(debug).Info("cluster-autoscaler is disabled. no node pools configured")
-	}
-
-	errOrNil := res.ErrorOrNil()
-	if errOrNil == nil {
-		for _, g := range groups {
-			groupIDs = append(groupIDs, g.id)
-		}
-		klog.V(debug).Infof("Setting manager groups to %+v", groupIDs)
-		m.nodeGroups = groups
-	}
-	return errOrNil
+	return nil
 }
 
 func (m *IECManagerImpl) GetNodeGroups() []*NodeGroup {
