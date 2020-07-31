@@ -9,3 +9,7 @@ data:
     cluster_id: YOUR_CLUSTERS_ID
     autoscaler_secret_name: NAME_OF_THE_AUTOSCALER_SECRET
     namespace: NAMESPACE_AUTOSCALER_AND_SECRET_ARE_DEPLOYED_TO
+    nodepools:
+      - id: IONOS_NODEPOOL_ID
+        autoscaler_limit_min: MIN_NUM_OF_NODES_IN_NODEPOOL
+        autoscaler_limit_max: MAX_NUM_OF_NODES_IN_NODEPOOL

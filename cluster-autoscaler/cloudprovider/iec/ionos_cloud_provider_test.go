@@ -49,12 +49,8 @@ func initializedManager(clientConf *clientConfObj) *IECManagerImpl {
 		ionosConf: clientConf,
 		nodeGroups: []*NodeGroup{
 			{
-				id:        "1",
-				clusterID: "12345",
-				nodePool: &profitbricks.KubernetesNodePool{
-					ID:         "1",
-					Properties: &profitbricks.KubernetesNodePoolProperties{DatacenterID: "12345"},
-				},
+				id:         "1",
+				clusterID:  "12345",
 				clientConf: clientConf,
 				minSize:    1,
 				maxSize:    3,
@@ -267,9 +263,12 @@ func TestIECCloudProvider_Pricing(t *testing.T) {
 }
 
 func TestIECCloudProvider_Cleanup(t *testing.T) {
-	provider := testCloudProvider(nil, nil)
+	iecManagerMock := &MockIECManager{}
+	iecManagerMock.On("Cleanup").Once()
+	provider := testCloudProvider(nil, iecManagerMock)
 	ret := provider.Cleanup()
 	assert.Nil(t, ret)
+	iecManagerMock.AssertExpectations(t)
 }
 
 func TestIECCloudProvider_Refresh(t *testing.T) {

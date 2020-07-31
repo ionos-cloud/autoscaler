@@ -6,14 +6,11 @@ import (
 	"github.com/profitbricks/profitbricks-sdk-go/v5"
 )
 
-//go:generate mockery -name Client -case snake -dir . -output ./cloudprovider/iec/mocks/client
+//go:generate mockery -name Client -case snake -dir . -output ./mocks
 type Client interface {
 
 	// GetNodePool gets a single node pool from the iec API
 	GetKubernetesNodePool(clusterID, nodepoolID string) (*profitbricks.KubernetesNodePool, error)
-
-	// ListNodePools lists all the node pools in a kubernetes cluster.
-	ListKubernetesNodePools(clusterID string) (*profitbricks.KubernetesNodePools, error)
 
 	// UpdateNodePool updates a specific node pool in a kubernetes cluster.
 	UpdateKubernetesNodePool(clusterID, nodepoolID string, nodepool profitbricks.KubernetesNodePool) (*profitbricks.KubernetesNodePool, error)

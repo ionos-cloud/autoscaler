@@ -119,6 +119,7 @@ func getIECConfigs(confPath string) (map[string]IECConfig, error) {
 func (o *clientConfObj) getIECConfig(datacenterID string) (*IECConfig, error) {
 	// If default token is set use it.
 	if o.defaultToken != "" {
+		klog.V(trace).Info("Default token found returning config with it.")
 		return &IECConfig{
 			Tokens:   []string{o.defaultToken},
 			Endpoint: o.defaultEndpoint,
@@ -132,11 +133,22 @@ func (o *clientConfObj) getIECConfig(datacenterID string) (*IECConfig, error) {
 	}
 
 	if datacenterID == "" {
-		for k := range confMap {
-			datacenterID = k
-			break
+		klog.V(trace).Info("No datacenterID provided. Return config with all tokens.")
+		tokens := []string{}
+		iecConfigs, err := configs(o.confPath)
+		if err != nil {
+			return nil, err
 		}
+		for _, conf := range iecConfigs {
+			tokens = append(tokens, conf.Tokens...)
+		}
+		return &IECConfig{
+			Tokens:   tokens,
+			Endpoint: o.defaultEndpoint,
+			Insecure: o.insecure,
+		}, nil
 	}
+
 	klog.V(trace).Infof("Using datacenterID: %s", datacenterID)
 	if config, ok := confMap[datacenterID]; ok {
 		return &config, nil

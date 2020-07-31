@@ -9,6 +9,11 @@ type MockIECManager struct {
 	mock.Mock
 }
 
+// Cleanup provides a mock function with given fields:
+func (_m *MockIECManager) Cleanup() {
+	_m.Called()
+}
+
 // GetClusterID provides a mock function with given fields:
 func (_m *MockIECManager) GetClusterID() string {
 	ret := _m.Called()

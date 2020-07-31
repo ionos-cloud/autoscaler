@@ -17,7 +17,6 @@ var _ Client = &profitbricks.Client{}
 var iecClientGetter = newIECClient
 
 func newIECClient(token, endpoint string, insecure bool) *iecClient {
-	klog.V(4).Infof("Setting up IEC iecClient, url: %s", endpoint)
 	ionosClient := profitbricks.NewClientbyToken(token)
 	if endpoint != "" {
 		ionosClient.SetCloudApiURL(endpoint)
