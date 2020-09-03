@@ -208,6 +208,7 @@ func CreateIECManager(configReader io.Reader) (IECManager, error) {
 		secretPath: cfg.AutoscalerSecretPath,
 		clusterID:  cfg.ClusterID,
 		ionosConf: &clientConfObj{
+			defaultEndpoint: cfg.IONOSDefaultEndpoint,
 			confPath:        cfg.AutoscalerSecretPath,
 			defaultToken:    cfg.DefaultIONOSToken,
 			insecure:        cfg.DefaultIONOSConInsecure,
