@@ -1,0 +1,81 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "autoscaler.fullname" . }}
+  labels:
+    {{- include "autoscaler.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "autoscaler.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/autoscaler-config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "autoscaler.selectorLabels" . | nindent 8 }}
+    spec:
+      hostAliases:
+        - hostnames:
+          - 10.fe.stage.pb.local
+          ip: 10.12.3.10
+      {{- if .Values.local }}
+      serviceAccountName: {{ include "autoscaler.name" . }}
+      {{- end }}
+      tolerations:
+        - effect: NoSchedule
+          operator: "Equal"
+          value: "true"
+          key: node-role.kubernetes.io/master
+      {{- if .Values.local }}
+      nodeSelector:
+        kubernetes.io/role: node
+      {{- end }}
+      volumes:
+        - name: autoscaler-config
+          configMap:
+            name: {{ include "autoscaler.fullname" . }}
+            items:
+              - key: config
+                path: autoscaler.config
+        - name: ionos-secret
+          secret:
+            secretName: ionos-secret
+        {{- if or (.Values.kubeConfig) (not .Values.local) }}
+        - name: kubeconfig-dir
+          secret:
+            secretName: kubernetes-admin
+        {{- end }}
+      containers:
+        - name: {{ include "autoscaler.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          command:
+            - ./cluster-autoscaler
+            - --cloud-provider=iec
+            - --skip-nodes-with-system-pods=false
+            - --cloud-config=/etc/iec-autoscaler/autoscaler.config
+            {{- if or (.Values.kubeConfig) (not .Values.local) }}
+            - --kubeconfig=/kubernetes/kubernetes-admin.conf
+            {{- end }}
+            - --v={{ .Values.autoscaler.klogLvl }}
+            - --stderrthreshold={{ .Values.autoscaler.stderrThreshold }}
+            {{- if .Values.autoscaler.options }}
+            {{- toYaml .Values.autoscaler.options | nindent 12}}
+            {{- end }}
+          volumeMounts:
+            - mountPath: /etc/iec-autoscaler
+              name: autoscaler-config
+              readOnly: true
+            - mountPath: /etc/iec-autoscaler/clouds
+              name: ionos-secret
+              readOnly: true
+            {{- if or (.Values.kubeConfig) (not .Values.local) }}
+            - mountPath: /kubernetes
+              name: kubeconfig-dir
+              readOnly: true
+            {{- end }}

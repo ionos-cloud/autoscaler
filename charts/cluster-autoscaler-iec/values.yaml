@@ -1,0 +1,50 @@
+# Default values for autoscaler.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: registry.k8s.cluster.ionos.com/kore/cluster-autoscaler-iec
+  pullPolicy: IfNotPresent
+
+# Defines kind of deployment, one of local or cpc
+# true: full deployment including serviceaccount, roles bindings
+# false: only deploy deployment and configmap
+local: true
+
+# Whether to use kubeconfig from secret or in-cluster config, bool
+kubeConfig: false
+
+autoscaler:
+  klogLvl: 1
+  stderrThreshold: warning
+  pollTimeout: 30m
+  pollInterval: 30s
+  options: []
+  # For testing
+  #  - --scale-down-delay-after-add=1m
+  #  - --scale-down-unneeded-time=1m
+  ionosClusterUUID:
+  ionosEndpoint: ""
+  ionosInsecure: false
+  nodepools: {}
+  # A map of nodepool ids to autoscaling limits. To activate autoscaler for a
+  # specific nodepool add an entry as follows:
+  #<nodepool_id>:
+  #  autoscaling_limit_max: <value>
+  #  autoscaling_limit_min: <value>
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 50Mi
+  requests:
+    cpu: 10m
+    memory: 30Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
