@@ -1,0 +1,6 @@
+apiVersion: v1
+name: cluster-autoscaler-iec
+description: >
+  A Helm chart for Kubernetes that deploys the cluster autoscaler and
+  configures it for IEC.
+version: 0.0.0

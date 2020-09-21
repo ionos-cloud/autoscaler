@@ -1,0 +1,20 @@
+{{- $nodepools := list -}}
+{{- range $id, $values := .Values.autoscaler.nodepools }}
+{{- $nodepools = append $nodepools (set $values "id" $id) }}
+{{- end -}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "autoscaler.fullname" . }}
+  labels:
+    {{- include "autoscaler.labels" . | nindent 4 }}
+data:
+  config: |
+    cluster_id: {{ required "autoscaler.ionosClusterUUID is required" .Values.autoscaler.ionosClusterUUID | quote }}
+    autoscaler_secret_path: "/etc/iec-autoscaler/clouds/"
+    poll_timeout: "{{ .Values.autoscaler.pollTimeout }}"
+    poll_interval: "{{ .Values.autoscaler.pollInterval }}"
+    ionos_default_endpoint: "{{ .Values.autoscaler.ionosEndpoint }}"
+    ionos_connection_insecure: {{ .Values.autoscaler.ionosInsecure }}
+    nodepools: {{- toYaml $nodepools | nindent 6 }}
