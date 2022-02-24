@@ -134,10 +134,53 @@ func TestCreateIonosCloudManager(t *testing.T) {
 
 func newKubernetesNodePool(state string, size int) *ionos.KubernetesNodePool {
 	return &ionos.KubernetesNodePool{
-		Id:         pointer.StringPtr("test"),
-		Metadata:   &ionos.DatacenterElementMetadata{State: pointer.StringPtr(state)},
-		Properties: &ionos.KubernetesNodePoolProperties{NodeCount: pointer.Int32Ptr(int32(size))},
+		Id:       pointer.StringPtr("test"),
+		Metadata: &ionos.DatacenterElementMetadata{State: pointer.StringPtr(state)},
+		Properties: &ionos.KubernetesNodePoolProperties{
+			Name:         pointer.StringPtr("test"),
+			DatacenterId: pointer.StringPtr("some_dc_id"),
+			NodeCount:    pointer.Int32Ptr(int32(size)),
+			K8sVersion:   pointer.StringPtr("some_k8s_version"),
+			MaintenanceWindow: &ionos.KubernetesMaintenanceWindow{
+				DayOfTheWeek: pointer.StringPtr("some_day"),
+				Time:         pointer.StringPtr("some_time"),
+			},
+			AutoScaling: &ionos.KubernetesAutoScaling{
+				MinNodeCount: pointer.Int32Ptr(int32(1)),
+				MaxNodeCount: pointer.Int32Ptr(int32(3)),
+			},
+			Lans: &[]ionos.KubernetesNodePoolLan{
+				{
+					Id:   pointer.Int32Ptr(2),
+					Dhcp: pointer.Bool(true),
+					Routes: &[]ionos.KubernetesNodePoolLanRoutes{
+						{
+							Network:   pointer.StringPtr("some_network"),
+							GatewayIp: pointer.StringPtr("some_gateway_ip"),
+						},
+					},
+				},
+			},
+			Labels:      &map[string]string{"key": "value"},
+			Annotations: &map[string]string{"key": "value"},
+			PublicIps:   &[]string{"some_public_ip"},
+		},
 	}
+}
+
+func updateKubernetesNodepool(nodePool *ionos.KubernetesNodePool, state string, size int) *ionos.KubernetesNodePool {
+	np := *nodePool
+	if state != "" {
+		metadata := *nodePool.GetMetadata()
+		metadata.SetState(state)
+		np.SetMetadata(metadata)
+	}
+	if size != 0 {
+		props := *np.GetProperties()
+		props.SetNodeCount(int32(size))
+		np.SetProperties(props)
+	}
+	return &np
 }
 
 func newKubernetesNode(id, state string) ionos.KubernetesNode {
@@ -175,10 +218,12 @@ type ManagerTestSuite struct {
 }
 
 func (s *ManagerTestSuite) SetupTest() {
+	clusterID, nodePoolID := "cluster", "test"
+	min, max := 1, 3
 	s.client = &MockAPIClient{}
 	apiClientFactory = func(_, _ string, _ bool) APIClient { return s.client }
 	client, err := NewAutoscalingClient(&Config{
-		ClusterId:    "cluster",
+		ClusterId:    clusterID,
 		Token:        "token",
 		PollInterval: pollInterval,
 		PollTimeout:  pollTimeout,
@@ -187,9 +232,9 @@ func (s *ManagerTestSuite) SetupTest() {
 
 	s.manager = newManager(client)
 	s.nodePool = &nodePool{
-		id:      "test",
-		min:     1,
-		max:     3,
+		id:      nodePoolID,
+		min:     min,
+		max:     max,
 		manager: s.manager,
 	}
 }
@@ -210,12 +255,13 @@ func (s *ManagerTestSuite) OnGetKubernetesNodePool(retval *ionos.KubernetesNodeP
 		On("K8sNodepoolsFindByIdExecute", req).Return(nodepool, nil, reterr)
 }
 
-func (s *ManagerTestSuite) OnUpdateKubernetesNodePool(size int, reterr error) *mock.Call {
+func (s *ManagerTestSuite) OnUpdateKubernetesNodePool(nodepool *ionos.KubernetesNodePool, size int, reterr error) *mock.Call {
 	origReq := ionos.ApiK8sNodepoolsPutRequest{}
-	req := ionos.ApiK8sNodepoolsPutRequest{}.KubernetesNodePoolProperties(resizeRequestBody(size))
+	resizedNodePool := resizedRequestBody(nodepool, size)
+	req := ionos.ApiK8sNodepoolsPutRequest{}.KubernetesNodePool(resizedNodePool)
 	return s.client.
 		On("K8sNodepoolsPut", mock.Anything, s.manager.client.clusterId, s.nodePool.id).Return(origReq).
-		On("K8sNodepoolsPutExecute", req).Return(ionos.KubernetesNodePoolForPut{}, nil, reterr)
+		On("K8sNodepoolsPutExecute", req).Return(*nodepool, nil, reterr)
 }
 
 func (s *ManagerTestSuite) OnListKubernetesNodes(retval *ionos.KubernetesNodes, reterr error) *mock.Call {
@@ -233,8 +279,9 @@ func (s *ManagerTestSuite) OnListKubernetesNodes(retval *ionos.KubernetesNodes, 
 func (s *ManagerTestSuite) OnDeleteKubernetesNode(id string, reterr error) *mock.Call {
 	req := ionos.ApiK8sNodepoolsNodesDeleteRequest{}
 	return s.client.
+		//		On("K8sNodpoolsFindById", mock.Anything, s.manager.client.clusterId, id).Return()
 		On("K8sNodepoolsNodesDelete", mock.Anything, s.manager.client.clusterId, s.nodePool.id, id).Return(req).
-		On("K8sNodepoolsNodesDeleteExecute", req).Return(nil, nil, reterr)
+		On("K8sNodepoolsNodesDeleteExecute", req).Return(nil, reterr)
 }
 
 func TestIonosCloudManager(t *testing.T) {
@@ -280,7 +327,9 @@ func (s *ManagerTestSuite) TestGetNodeGroupTargetSize_OK() {
 
 func (s *ManagerTestSuite) TestSetNodeGroupSize_ResizeError() {
 	s.manager.cache.SetNodeGroupSize(s.nodePool.Id(), 1)
-	s.OnUpdateKubernetesNodePool(2, fmt.Errorf("error")).Once()
+	nodePool := newKubernetesNodePool(K8sStateActive, 1)
+	s.OnGetKubernetesNodePool(nodePool, nil).Once()
+	s.OnUpdateKubernetesNodePool(nodePool, 2, fmt.Errorf("error")).Once()
 
 	s.Error(s.manager.SetNodeGroupSize(s.nodePool, 2))
 	s.Empty(s.manager.cache.GetNodeGroups())
@@ -290,8 +339,10 @@ func (s *ManagerTestSuite) TestSetNodeGroupSize_ResizeError() {
 }
 
 func (s *ManagerTestSuite) TestSetNodeGroupSize_WaitGetError() {
-	s.OnUpdateKubernetesNodePool(2, nil).Once()
-	s.OnGetKubernetesNodePool(newKubernetesNodePool(K8sStateUpdating, 1), nil).Times(3)
+	nodePool := newKubernetesNodePool(K8sStateActive, 1)
+	s.OnUpdateKubernetesNodePool(nodePool, 2, nil).Once()
+	nodePool.Metadata.SetState(K8sStateUpdating)
+	s.OnGetKubernetesNodePool(nodePool, nil).Times(3)
 	s.OnGetKubernetesNodePool(nil, fmt.Errorf("error")).Once()
 
 	err := s.manager.SetNodeGroupSize(s.nodePool, 2)
@@ -302,9 +353,11 @@ func (s *ManagerTestSuite) TestSetNodeGroupSize_WaitGetError() {
 }
 
 func (s *ManagerTestSuite) TestSetNodeGroupSize_WaitTimeout() {
-	s.OnUpdateKubernetesNodePool(2, nil).Once()
+	nodePool := newKubernetesNodePool(K8sStateActive, 1)
+	s.OnUpdateKubernetesNodePool(nodePool, 2, nil).Once()
 	pollCount := 0
-	s.OnGetKubernetesNodePool(newKubernetesNodePool(K8sStateUpdating, 1), nil).
+	nodePool.Metadata.SetState(K8sStateUpdating)
+	s.OnGetKubernetesNodePool(nodePool, nil).
 		Run(func(_ mock.Arguments) {
 			pollCount++
 		})
@@ -319,9 +372,11 @@ func (s *ManagerTestSuite) TestSetNodeGroupSize_WaitTimeout() {
 }
 
 func (s *ManagerTestSuite) TestSetNodeGroupSize_RefreshNodesError() {
-	s.OnUpdateKubernetesNodePool(2, nil).Once()
-	s.OnGetKubernetesNodePool(newKubernetesNodePool(K8sStateUpdating, 1), nil).Times(3)
-	s.OnGetKubernetesNodePool(newKubernetesNodePool(K8sStateActive, 2), nil).Once()
+	nodePool := newKubernetesNodePool(K8sStateActive, 1)
+	s.OnGetKubernetesNodePool(nodePool, nil).Once()
+	s.OnUpdateKubernetesNodePool(nodePool, 2, nil).Once()
+	s.OnGetKubernetesNodePool(updateKubernetesNodepool(nodePool, K8sStateUpdating, 0), nil).Times(3)
+	s.OnGetKubernetesNodePool(updateKubernetesNodepool(nodePool, K8sStateActive, 2), nil).Once()
 	s.OnListKubernetesNodes(nil, fmt.Errorf("error")).Once()
 
 	s.Error(s.manager.SetNodeGroupSize(s.nodePool, 2))
@@ -330,9 +385,15 @@ func (s *ManagerTestSuite) TestSetNodeGroupSize_RefreshNodesError() {
 }
 
 func (s *ManagerTestSuite) TestSetNodeGroupSize_OK() {
-	s.OnUpdateKubernetesNodePool(2, nil).Once()
-	s.OnGetKubernetesNodePool(newKubernetesNodePool(K8sStateUpdating, 1), nil).Times(3)
-	s.OnGetKubernetesNodePool(newKubernetesNodePool(K8sStateActive, 2), nil).Once()
+	ionosNodePool := newKubernetesNodePool(K8sStateActive, 1)
+	s.OnGetKubernetesNodePool(ionosNodePool, nil).Once()
+	s.OnUpdateKubernetesNodePool(ionosNodePool, 2, nil).Once()
+	s.OnGetKubernetesNodePool(updateKubernetesNodepool(
+		ionosNodePool, K8sStateUpdating, 0), nil).Times(3)
+	s.OnGetKubernetesNodePool(updateKubernetesNodepool(
+		ionosNodePool, K8sStateUpdating, 2), nil).Times(2)
+	s.OnGetKubernetesNodePool(updateKubernetesNodepool(
+		ionosNodePool, K8sStateActive, 2), nil).Once()
 	s.OnListKubernetesNodes(&ionos.KubernetesNodes{
 		Items: &[]ionos.KubernetesNode{
 			newKubernetesNode("node-1", K8sNodeStateReady),
