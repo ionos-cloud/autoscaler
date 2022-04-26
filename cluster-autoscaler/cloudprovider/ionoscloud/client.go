@@ -59,19 +59,16 @@ type APIClient interface {
 	K8sNodepoolsNodesGet(ctx context.Context, k8sClusterId string, nodepoolId string) ionos.ApiK8sNodepoolsNodesGetRequest
 	K8sNodepoolsNodesGetExecute(r ionos.ApiK8sNodepoolsNodesGetRequest) (ionos.KubernetesNodes, *ionos.APIResponse, error)
 	K8sNodepoolsNodesDelete(ctx context.Context, k8sClusterId string, nodepoolId string, nodeId string) ionos.ApiK8sNodepoolsNodesDeleteRequest
-	K8sNodepoolsNodesDeleteExecute(r ionos.ApiK8sNodepoolsNodesDeleteRequest) (map[string]interface{}, *ionos.APIResponse, error)
+	K8sNodepoolsNodesDeleteExecute(r ionos.ApiK8sNodepoolsNodesDeleteRequest) (*ionos.APIResponse, error)
 	K8sNodepoolsPut(ctx context.Context, k8sClusterId string, nodepoolId string) ionos.ApiK8sNodepoolsPutRequest
-	K8sNodepoolsPutExecute(r ionos.ApiK8sNodepoolsPutRequest) (ionos.KubernetesNodePoolForPut, *ionos.APIResponse, error)
+	K8sNodepoolsPutExecute(r ionos.ApiK8sNodepoolsPutRequest) (ionos.KubernetesNodePool, *ionos.APIResponse, error)
 }
 
 var apiClientFactory = NewAPIClient
 
 // NewAPIClient creates a new IonosCloud API client.
 func NewAPIClient(token, endpoint string, insecure bool) APIClient {
-	config := ionos.NewConfiguration("", "", token)
-	if endpoint != "" {
-		config.Servers[0].URL = endpoint
-	}
+	config := ionos.NewConfiguration("", "", token, endpoint)
 	if insecure {
 		config.HTTPClient = &http.Client{
 			Transport: &http.Transport{
@@ -165,9 +162,24 @@ func (c *AutoscalingClient) GetNodePool(id string) (*ionos.KubernetesNodePool, e
 	return &nodepool, nil
 }
 
-func resizeRequestBody(targetSize int) ionos.KubernetesNodePoolPropertiesForPut {
-	return ionos.KubernetesNodePoolPropertiesForPut{
-		NodeCount: pointer.Int32Ptr(int32(targetSize)),
+func resizedRequestBody(nodepool *ionos.KubernetesNodePool, targetSize int) ionos.KubernetesNodePoolForPut {
+	props := nodepool.GetProperties()
+	return ionos.KubernetesNodePoolForPut{
+		Id:       nodepool.GetId(),
+		Type:     nodepool.GetType(),
+		Href:     nodepool.GetHref(),
+		Metadata: nodepool.GetMetadata(),
+		Properties: &ionos.KubernetesNodePoolPropertiesForPut{
+			Name:              props.GetName(),
+			NodeCount:         pointer.Int32Ptr(int32(targetSize)),
+			K8sVersion:        props.GetK8sVersion(),
+			MaintenanceWindow: props.GetMaintenanceWindow(),
+			AutoScaling:       props.GetAutoScaling(),
+			Lans:              props.GetLans(),
+			Labels:            props.GetLabels(),
+			Annotations:       props.GetAnnotations(),
+			PublicIps:         props.GetPublicIps(),
+		},
 	}
 }
 
@@ -178,8 +190,12 @@ func (c *AutoscalingClient) ResizeNodePool(id string, targetSize int) error {
 	if err != nil {
 		return err
 	}
-	req := client.K8sNodepoolsPut(context.Background(), c.clusterId, id)
-	req = req.KubernetesNodePoolProperties(resizeRequestBody(targetSize))
+	nodepool, err := c.GetNodePool(id)
+	if err != nil {
+		return err
+	}
+	req := client.K8sNodepoolsPut(context.Background(), c.clusterId, id).KubernetesNodePool(
+		resizedRequestBody(nodepool, targetSize))
 	_, _, err = client.K8sNodepoolsPutExecute(req)
 	return err
 }
@@ -220,6 +236,6 @@ func (c *AutoscalingClient) DeleteNode(id, nodeId string) error {
 		return err
 	}
 	req := client.K8sNodepoolsNodesDelete(context.Background(), c.clusterId, id, nodeId)
-	_, _, err = client.K8sNodepoolsNodesDeleteExecute(req)
+	_, err = client.K8sNodepoolsNodesDeleteExecute(req)
 	return err
 }
