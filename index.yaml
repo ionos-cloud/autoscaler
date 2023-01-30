@@ -3,25 +3,19 @@ entries:
   cluster-autoscaler:
   - apiVersion: v2
     appVersion: 1.23.0
-    created: "2022-05-18T08:55:36.001614528Z"
+    created: "2023-01-30T21:29:57.377127413Z"
     description: Scales Kubernetes worker nodes within autoscaling groups.
-    digest: 4732a11284850644d8a0daa099459b13910e5a15eb710a7f23a596f9e081b996
+    digest: 88bd8531583783b2b6c512bdf89e199a42e116e959b430e51c7ef5ce513436b1
     home: https://github.com/kubernetes/autoscaler
     icon: https://github.com/kubernetes/kubernetes/raw/master/logo/logo.png
     maintainers:
-    - email: e.bailey@sportradar.com
-      name: yurrriq
-    - email: mgoodness@gmail.com
-      name: mgoodness
     - email: guyjtempleton@googlemail.com
       name: gjtempleton
-    - email: scott.crooks@gmail.com
-      name: sc250024
     name: cluster-autoscaler
     sources:
     - https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler
     type: application
     urls:
-    - https://github.com/ionos-cloud/autoscaler/releases/download/cluster-autoscaler-chart-9.18.1/cluster-autoscaler-9.18.1.tgz
-    version: 9.18.1
-generated: "2022-05-18T08:55:35.733907053Z"
+    - https://github.com/ionos-cloud/autoscaler/releases/download/cluster-autoscaler-chart-9.21.1/cluster-autoscaler-9.21.1.tgz
+    version: 9.21.1
+generated: "2023-01-30T21:29:57.165891623Z"
