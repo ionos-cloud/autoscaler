@@ -25,7 +25,7 @@ Store the token in a secret:
 kubectl create secret generic cloud-config --from-literal=token=MY_TOKEN
 ```
 
-Edit [`example-values.yaml`](./examples-values.yaml) and deploy using helm:
+Edit [`example-values.yaml`](./example-values.yaml) and deploy using helm:
 
 ```console
 helm install ionoscloud-cluster-autoscaler autoscaler/cluster-autoscaler -f example-values.yaml
