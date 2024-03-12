@@ -17,6 +17,7 @@ limitations under the License.
 package ionoscloud
 
 import (
+	"maps"
 	"sync"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -72,16 +73,10 @@ func (cache *IonosCache) SetInstancesCacheForNodeGroup(id string, instances []cl
 	cache.mutex.Lock()
 	defer cache.mutex.Unlock()
 
-	cache.removeNodesForNodeGroupNoLock(id)
+	maps.DeleteFunc(cache.nodesToNodeGroups, func(_, nodeGroupID string) bool {
+		return nodeGroupID == id
+	})
 	cache.setInstancesCacheForNodeGroupNoLock(id, instances)
-}
-
-func (cache *IonosCache) removeNodesForNodeGroupNoLock(id string) {
-	for nodeID, nodeGroupID := range cache.nodesToNodeGroups {
-		if nodeGroupID == id {
-			delete(cache.nodesToNodeGroups, nodeID)
-		}
-	}
 }
 
 func (cache *IonosCache) setInstancesCacheForNodeGroupNoLock(id string, instances []cloudprovider.Instance) {

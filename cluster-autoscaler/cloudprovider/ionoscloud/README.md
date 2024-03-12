@@ -40,6 +40,11 @@ mockery --inpackage --testonly --case snake --boilerplate-file ../../../hack/boi
 mockery --inpackage --testonly --case snake --boilerplate-file ../../../hack/boilerplate/boilerplate.generatego.txt --name IonosCloudManager
 ```
 
+### Debugging
+
+The global logging verbosity controlled by the `--v` flag is passed on to the Ionos Cloud SDK client logger.
+Verbosity 5 maps to `Debug` and 7 to `Trace`. **Do not enable this in production as it will print full request and response data.**
+
 ### Build an image
 
 Build and push a docker image in the `cluster-autoscaler` directory:
