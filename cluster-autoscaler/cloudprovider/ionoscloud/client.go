@@ -69,7 +69,7 @@ func NewAPIClient(cfg *Config, userAgent string) APIClient {
 			},
 		}
 	}
-	for key, value := range cfg.CustomHeaders {
+	for key, value := range cfg.AdditionalHeaders {
 		config.AddDefaultHeader(key, value)
 	}
 

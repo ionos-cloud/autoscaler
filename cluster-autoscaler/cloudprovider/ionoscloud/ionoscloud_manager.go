@@ -32,16 +32,16 @@ import (
 )
 
 const (
-	envKeyClusterID     = "IONOS_CLUSTER_ID"
-	envKeyToken         = ionos.IonosTokenEnvVar
-	envKeyEndpoint      = ionos.IonosApiUrlEnvVar
-	envKeyInsecure      = "IONOS_INSECURE"
-	envKeyPollTimeout   = "IONOS_POLL_TIMEOUT"
-	envKeyPollInterval  = "IONOS_POLL_INTERVAL"
-	envKeyTokensPath    = "IONOS_TOKENS_PATH"
-	envKeyCustomHeaders = "IONOS_CUSTOM_HEADERS"
-	defaultTimeout      = 15 * time.Minute
-	defaultInterval     = 30 * time.Second
+	envKeyClusterID         = "IONOS_CLUSTER_ID"
+	envKeyToken             = ionos.IonosTokenEnvVar
+	envKeyEndpoint          = ionos.IonosApiUrlEnvVar
+	envKeyInsecure          = "IONOS_INSECURE"
+	envKeyPollTimeout       = "IONOS_POLL_TIMEOUT"
+	envKeyPollInterval      = "IONOS_POLL_INTERVAL"
+	envKeyTokensPath        = "IONOS_TOKENS_PATH"
+	envKeyAdditionalHeaders = "IONOS_ADDITIONAL_HEADERS"
+	defaultTimeout          = 15 * time.Minute
+	defaultInterval         = 30 * time.Second
 )
 
 // IonosCloudManager handles IonosCloud communication and data caching of node groups.
@@ -82,8 +82,8 @@ type Config struct {
 	PollInterval time.Duration
 	// TokensPath points to a directory that contains token files
 	TokensPath string
-	// CustomHeaders are additional HTTP headers to append to each IonosCloud API request.
-	CustomHeaders map[string]string
+	// AdditionalHeaders are additional HTTP headers to append to each IonosCloud API request.
+	AdditionalHeaders map[string]string
 }
 
 // LoadConfigFromEnv loads the IonosCloud client config from env.
@@ -124,14 +124,19 @@ func LoadConfigFromEnv() (*Config, error) {
 		}
 	}
 
-	if rawHeaders := os.Getenv(envKeyCustomHeaders); rawHeaders != "" {
-		config.CustomHeaders = make(map[string]string)
+	if rawHeaders := os.Getenv(envKeyAdditionalHeaders); rawHeaders != "" {
+		config.AdditionalHeaders = make(map[string]string)
 		for _, item := range strings.Split(rawHeaders, ";") {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				// ignore empty items and trailing semicolons
+				continue
+			}
 			k, v, ok := strings.Cut(item, ":")
 			if !ok {
-				return nil, fmt.Errorf("invalid headers value: %q", rawHeaders)
+				return nil, fmt.Errorf("missing colon in additional headers: %q", rawHeaders)
 			}
-			config.CustomHeaders[k] = v
+			config.AdditionalHeaders[k] = v
 		}
 	}
 

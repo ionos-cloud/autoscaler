@@ -29,10 +29,10 @@ func TestCustomGetClient(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tokensPath, "..ignoreme"), []byte(`{"invalid"}`), 0o600))
 
 	client := NewAutoscalingClient(&Config{
-		TokensPath:    tokensPath,
-		Endpoint:      "https://api.ionos.com",
-		Insecure:      true,
-		CustomHeaders: map[string]string{"Foo": "Bar"},
+		TokensPath:        tokensPath,
+		Endpoint:          "https://api.ionos.com",
+		Insecure:          true,
+		AdditionalHeaders: map[string]string{"Foo": "Bar"},
 	}, "test")
 
 	_, err := client.getClient()
